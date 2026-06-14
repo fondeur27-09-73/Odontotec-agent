@@ -36,3 +36,25 @@ def test_is_bot_off_false():
         "https://chatwoot.test.com/api/v1/accounts/1/conversations/42/labels"
     ).mock(return_value=httpx.Response(200, json={"payload": []}))
     assert is_bot_off(42) is False
+
+@respx.mock
+def test_add_label_when_not_present():
+    respx.get(
+        "https://chatwoot.test.com/api/v1/accounts/1/conversations/42/labels"
+    ).mock(return_value=httpx.Response(200, json={"payload": []}))
+    post_route = respx.post(
+        "https://chatwoot.test.com/api/v1/accounts/1/conversations/42/labels"
+    ).mock(return_value=httpx.Response(200, json={"payload": ["bot-off"]}))
+    add_label(42, "bot-off")
+    assert post_route.called
+
+@respx.mock
+def test_add_label_skips_if_present():
+    respx.get(
+        "https://chatwoot.test.com/api/v1/accounts/1/conversations/42/labels"
+    ).mock(return_value=httpx.Response(200, json={"payload": ["bot-off"]}))
+    post_route = respx.post(
+        "https://chatwoot.test.com/api/v1/accounts/1/conversations/42/labels"
+    ).mock(return_value=httpx.Response(200, json={}))
+    add_label(42, "bot-off")
+    assert not post_route.called
