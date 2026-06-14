@@ -1,6 +1,4 @@
 import os
-import sys
-import importlib
 from unittest.mock import patch
 
 for k, v in {
@@ -16,14 +14,7 @@ for k, v in {
 }.items():
     os.environ.setdefault(k, v)
 
-
-def _get_send_nightly_reminders():
-    """Import (or reload) the reminders module to get the current implementation."""
-    if "scheduler.reminders" in sys.modules:
-        mod = importlib.reload(sys.modules["scheduler.reminders"])
-    else:
-        import scheduler.reminders as mod
-    return mod.send_nightly_reminders
+from scheduler.reminders import send_nightly_reminders
 
 
 def test_send_nightly_reminders_processes_booking():
@@ -37,7 +28,6 @@ def test_send_nightly_reminders_processes_booking():
          patch("integrations.supabase_client.ensure_patient") as mock_ensure, \
          patch("integrations.supabase_client.save_reminder") as mock_save, \
          patch("integrations.supabase_client.update_reminder_status") as mock_update:
-        send_nightly_reminders = _get_send_nightly_reminders()
         send_nightly_reminders()
         mock_ensure.assert_called_once_with("+18491234567")
         mock_save.assert_called_once()
@@ -53,7 +43,6 @@ def test_send_nightly_reminders_skips_non_odontotec_email():
     }]
     with patch("integrations.calcom.get_upcoming_bookings", return_value=bookings), \
          patch("integrations.supabase_client.save_reminder") as mock_save:
-        send_nightly_reminders = _get_send_nightly_reminders()
         send_nightly_reminders()
         mock_save.assert_not_called()
 
@@ -61,6 +50,4 @@ def test_send_nightly_reminders_skips_non_odontotec_email():
 def test_send_nightly_reminders_handles_calcom_error():
     with patch("integrations.calcom.get_upcoming_bookings",
                side_effect=Exception("connection refused")):
-        send_nightly_reminders = _get_send_nightly_reminders()
-        # Should not raise — errors are caught and logged
         send_nightly_reminders()
