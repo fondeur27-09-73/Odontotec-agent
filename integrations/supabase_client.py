@@ -60,6 +60,7 @@ def increment_recado(phone: str) -> int:
     return count
 
 def save_reminder(cal_uid: str, phone: str, doctor: str, specialty: str, appt_at: str):
+    ensure_patient(phone)
     get_client().table("appointment_reminders").upsert({
         "cal_booking_uid": cal_uid,
         "patient_phone": phone,
@@ -70,10 +71,12 @@ def save_reminder(cal_uid: str, phone: str, doctor: str, specialty: str, appt_at
     }).execute()
 
 def get_pending_reminders(date_str: str) -> list[dict]:
+    from datetime import date, timedelta
+    next_day = (date.fromisoformat(date_str) + timedelta(days=1)).isoformat()
     result = (get_client().table("appointment_reminders")
         .select("*").eq("status", "pending")
         .gte("appointment_at", f"{date_str}T00:00:00")
-        .lt("appointment_at", f"{date_str}T23:59:59")
+        .lt("appointment_at", f"{next_day}T00:00:00")
         .execute())
     return result.data
 
