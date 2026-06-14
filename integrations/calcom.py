@@ -4,22 +4,39 @@ import httpx
 
 TIMEZONE = os.getenv("TIMEZONE", "America/Santo_Domingo")
 
+
 def _headers() -> dict:
+    key = os.getenv("CALCOM_API_KEY")
+    if not key:
+        raise RuntimeError("CALCOM_API_KEY not set")
     return {
-        "Authorization": f"Bearer {os.getenv('CALCOM_API_KEY')}",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "cal-api-version": "2024-09-04"
     }
 
+
 def _base_url() -> str:
-    return os.getenv("CALCOM_URL")
+    url = os.getenv("CALCOM_URL")
+    if not url:
+        raise RuntimeError("CALCOM_URL not set")
+    return url
+
 
 def _event_id(specialty: str) -> int:
     events = json.loads(os.getenv("CALCOM_EVENTS", "{}"))
     eid = events.get(specialty.lower())
-    if not eid:
+    if eid is None:
         raise ValueError(f"Unknown specialty: {specialty}. Valid: {list(events.keys())}")
     return eid
+
+
+def _check_response(body: dict, context: str) -> dict:
+    if body.get("status") != "success":
+        msg = body.get("message") or body.get("error") or "unknown error"
+        raise RuntimeError(f"Cal.com error in {context}: {msg}")
+    return body["data"]
+
 
 def check_availability(specialty: str, date_from: str, date_to: str) -> dict:
     r = httpx.get(
@@ -34,7 +51,8 @@ def check_availability(specialty: str, date_from: str, date_to: str) -> dict:
         timeout=10
     )
     r.raise_for_status()
-    return r.json()["data"]["slots"]
+    return _check_response(r.json(), "check_availability").get("slots", {})
+
 
 def book_appointment(patient_phone: str, patient_name: str, specialty: str, start_time: str) -> dict:
     r = httpx.post(
@@ -53,7 +71,8 @@ def book_appointment(patient_phone: str, patient_name: str, specialty: str, star
         timeout=10
     )
     r.raise_for_status()
-    return r.json()["data"]
+    return _check_response(r.json(), "book_appointment")
+
 
 def reschedule_appointment(booking_uid: str, new_start_time: str) -> dict:
     r = httpx.patch(
@@ -63,7 +82,8 @@ def reschedule_appointment(booking_uid: str, new_start_time: str) -> dict:
         timeout=10
     )
     r.raise_for_status()
-    return r.json()["data"]
+    return _check_response(r.json(), "reschedule_appointment")
+
 
 def get_patient_bookings(patient_phone: str) -> list[dict]:
     email = f"{patient_phone.replace('+', '')}@odontotec.bot"
@@ -75,6 +95,7 @@ def get_patient_bookings(patient_phone: str) -> list[dict]:
     )
     r.raise_for_status()
     return r.json().get("data", {}).get("bookings", [])
+
 
 def get_upcoming_bookings(date_str: str) -> list[dict]:
     r = httpx.get(
