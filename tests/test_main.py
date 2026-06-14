@@ -1,4 +1,5 @@
 import os
+import pytest
 from unittest.mock import patch, MagicMock
 
 for k, v in {
@@ -17,12 +18,16 @@ for k, v in {
 }.items():
     os.environ.setdefault(k, v)
 
-with patch("scheduler.reminders.start_scheduler", return_value=MagicMock()):
-    from fastapi.testclient import TestClient
-    from main import app
-    client = TestClient(app)
+@pytest.fixture(autouse=True)
+def mock_scheduler():
+    with patch("scheduler.reminders.start_scheduler", return_value=MagicMock()):
+        yield
 
 def test_health():
+    with patch("scheduler.reminders.start_scheduler", return_value=MagicMock()):
+        from fastapi.testclient import TestClient
+        from main import app
+        client = TestClient(app)
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
