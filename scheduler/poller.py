@@ -75,13 +75,18 @@ def poll_new_messages():
         content = latest.get("content", "")
 
         if not content:
-            for att in latest.get("attachments", []):
-                if att.get("file_type") in ("audio", "audio_file"):
+            attachments = latest.get("attachments", [])
+            if attachments:
+                logger.info(f"[poller] attachments conv={conv_id}: {[{'type': a.get('file_type'), 'url': a.get('data_url','')} for a in attachments]}")
+            for att in attachments:
+                file_type = att.get("file_type", "")
+                if file_type in ("audio", "audio_file") or "audio" in file_type:
                     try:
                         from utils.audio import transcribe_audio
                         content = transcribe_audio(att.get("data_url", ""))
+                        logger.info(f"[poller] audio transcribed conv={conv_id}: {content[:80]}")
                     except Exception as e:
-                        logger.error(f"[poller] audio error conv={conv_id}: {e}")
+                        logger.error(f"[poller] audio error conv={conv_id}: {e}", exc_info=True)
                     break
 
         if not phone or not content:

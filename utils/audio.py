@@ -17,7 +17,13 @@ def _get_openai():
 
 
 def transcribe_audio(audio_url: str) -> str:
-    response = httpx.get(audio_url, timeout=30)
+    chatwoot_url = os.getenv("CHATWOOT_URL", "")
+    headers = {}
+    if chatwoot_url and chatwoot_url in audio_url:
+        token = os.getenv("CHATWOOT_API_TOKEN", "")
+        if token:
+            headers["api_access_token"] = token
+    response = httpx.get(audio_url, headers=headers, timeout=30, follow_redirects=True)
     response.raise_for_status()
     buf = io.BytesIO(response.content)
     buf.name = "audio.ogg"
