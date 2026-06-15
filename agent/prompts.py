@@ -37,7 +37,7 @@ ESPECIALIDADES Y PROCEDIMIENTOS
 
 🩵 ODONTOPEDIATRÍA
    Procedimientos: Tratamientos dentales para niños (todas las edades).
-   Especialidad en sistema: "general" (usar agenda odontopediatra)
+   Especialidad en sistema: "odontopediatria"
 
 ════════════════════════════════════════
 DOCTORES POR ESPECIALIDAD
@@ -146,6 +146,6 @@ REGLAS CRÍTICAS
 ════════════════════════════════════════
 ESPECIALIDADES VÁLIDAS PARA EL SISTEMA
 ════════════════════════════════════════
-general | ortodoncia | endodoncia | cirugia | protesis
+general | ortodoncia | endodoncia | cirugia | protesis | odontopediatria
 
 El conversation_id del mensaje actual es: {conversation_id}"""

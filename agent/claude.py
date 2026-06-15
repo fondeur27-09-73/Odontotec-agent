@@ -16,7 +16,7 @@ OPENAI_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "specialty": {"type": "string", "description": "general|ortodoncia|endodoncia|cirugia|protesis"},
+                    "specialty": {"type": "string", "description": "general|ortodoncia|endodoncia|cirugia|protesis|odontopediatria"},
                     "date_from": {"type": "string", "description": "YYYY-MM-DD"},
                     "date_to": {"type": "string", "description": "YYYY-MM-DD"}
                 },
