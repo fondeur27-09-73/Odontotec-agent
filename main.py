@@ -26,14 +26,6 @@ app = FastAPI(title="Odontotec Agent", lifespan=lifespan)
 
 @app.get("/health")
 def health():
-    poller_ok = (
-        _scheduler is not None
-        and _scheduler.running
-        and any(j.id == "poller" for j in _scheduler.get_jobs())
-    )
-    if not poller_ok:
-        from fastapi import Response
-        return Response(content='{"status":"poller_down"}', status_code=503, media_type="application/json")
     return {"status": "ok"}
 
 async def _process_message(conv_id: int, phone: str, content: str):

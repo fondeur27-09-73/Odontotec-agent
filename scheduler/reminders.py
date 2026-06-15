@@ -69,9 +69,6 @@ def start_scheduler():
     scheduler = BackgroundScheduler(timezone=tz)
     scheduler.add_job(send_nightly_reminders, "cron", hour=hour, minute=0)
 
-    from scheduler.poller import poll_new_messages
-    scheduler.add_job(poll_new_messages, "interval", seconds=10, id="poller")
-
     scheduler.start()
     print(f"[scheduler] reminders scheduled at {hour}:00 {tz}")
     return scheduler
