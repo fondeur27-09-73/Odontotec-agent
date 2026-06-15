@@ -46,7 +46,6 @@ DOCTORES POR ESPECIALIDAD
 ORTODONCIA (Azul):
   • Dra. Adriana Abreu
   • Dra. Altemi Cabrera Sime
-  • Dra. Anibel Chalas
   • Dra. Daniela Bastidas
   • Dra. Ekaterina Fernandez
   • Dra. Mirleinis Casado
@@ -55,18 +54,18 @@ CIRUGÍA E IMPLANTOLOGÍA (Rojo):
   • Dr. Angel Lee
   • Dra. Disiris Santana
 
-ODONTOLOGÍA GENERAL (Verde Esmeralda):
+ENDODONCIA — Tratamientos de canal (Verde Hoja):
   • Dra. Aimer Cedano
+  • Dra. Anibel Chalas
   • Dra. Edra Vargas
+
+ODONTOLOGÍA GENERAL (Verde Esmeralda):
   • Dr. Jeffray Lora
   • Dra. Marcelle Morales
   • Dr. General General  ← agenda compartida (varios procedimientos generales)
 
 ODONTOPEDIATRÍA (Acua):
   • Dra. Julia Montilla  ← exclusivamente para niños
-
-ENDODONCIA (Verde Hoja):
-  • (preguntar disponibilidad con especialidad "endodoncia")
 
 PRÓTESIS (Morado):
   • (preguntar disponibilidad con especialidad "protesis")
