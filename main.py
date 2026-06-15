@@ -12,17 +12,28 @@ BOT_OFF_LABEL = os.getenv("BOT_OFF_LABEL", "bot-off")
 
 logger = logging.getLogger("odontotec")
 
+_scheduler = None
+
 @asynccontextmanager
 async def lifespan(app):
+    global _scheduler
     from scheduler.reminders import start_scheduler
-    scheduler = start_scheduler()
+    _scheduler = start_scheduler()
     yield
-    scheduler.shutdown()
+    _scheduler.shutdown()
 
 app = FastAPI(title="Odontotec Agent", lifespan=lifespan)
 
 @app.get("/health")
 def health():
+    poller_ok = (
+        _scheduler is not None
+        and _scheduler.running
+        and any(j.id == "poller" for j in _scheduler.get_jobs())
+    )
+    if not poller_ok:
+        from fastapi import Response
+        return Response(content='{"status":"poller_down"}', status_code=503, media_type="application/json")
     return {"status": "ok"}
 
 async def _process_message(conv_id: int, phone: str, content: str):
