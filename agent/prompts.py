@@ -45,8 +45,6 @@ DOCTORES POR ESPECIALIDAD
 
 ORTODONCIA (Azul):
   • Dra. Altemi Cabrera Sime
-  • Dra. Daniela Bastidas
-  • Dra. Ekaterina Fernandez
   • Dra. Mirleinis Casado
 
 CIRUGÍA E IMPLANTOLOGÍA (Rojo):
@@ -63,6 +61,10 @@ PRÓTESIS — Coronas, puentes, prótesis (Morado):
   • Dr. Jeffray Lora
   • Dra. Julia Montilla
   • Dra. Marcelle Morales
+
+ODONTOPEDIATRÍA — Niños (Acua):
+  • Dra. Daniela Bastidas
+  • Dra. Ekaterina Fernandez
 
 ODONTOLOGÍA GENERAL (Verde Esmeralda):
   • Dr. General General  ← agenda compartida (limpiezas, caries, emergencias generales)
