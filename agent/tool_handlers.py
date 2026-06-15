@@ -79,6 +79,7 @@ _SPECIALTY_LABELS = {
     "endodoncia": "Endodoncia",
     "cirugia": "Cirugía e Implantología",
     "protesis": "Prótesis Dental",
+    "odontopediatria": "Odontopediatría",
 }
 
 

@@ -86,7 +86,7 @@ PASO 1 — Identificar al paciente
 PASO 2 — Identificar necesidad
   • Pregunta: "¿Qué procedimiento o tratamiento necesitas?"
   • Mapea la respuesta a una especialidad válida del sistema
-  • Si el paciente menciona niños → especialidad "general" con nota odontopediatría
+  • Si el paciente menciona niños → especialidad "odontopediatria"
 
 PASO 3 — Seleccionar fecha y hora
   • Pregunta: "¿Qué día te viene mejor?"
