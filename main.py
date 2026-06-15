@@ -1,12 +1,16 @@
 import os
+import asyncio
+import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, BackgroundTasks
 from dotenv import load_dotenv
 
 load_dotenv()
 
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
 BOT_OFF_LABEL = os.getenv("BOT_OFF_LABEL", "bot-off")
+
+logger = logging.getLogger("odontotec")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -21,8 +25,25 @@ app = FastAPI(title="Odontotec Agent", lifespan=lifespan)
 def health():
     return {"status": "ok"}
 
+async def _process_message(conv_id: int, phone: str, content: str):
+    try:
+        from integrations.supabase_client import ensure_patient, save_message, get_messages
+        from integrations.chatwoot import send_message
+        from agent.claude import run_agent
+
+        ensure_patient(phone)
+        save_message(phone, "user", content)
+        history = get_messages(phone, MAX_HISTORY)
+
+        response_text = await asyncio.to_thread(run_agent, history, conv_id)
+
+        save_message(phone, "assistant", response_text)
+        send_message(conv_id, response_text)
+    except Exception as e:
+        logger.error(f"Error processing message conv={conv_id} phone={phone}: {e}", exc_info=True)
+
 @app.post("/webhook")
-async def webhook(request: Request):
+async def webhook(request: Request, background_tasks: BackgroundTasks):
     payload = await request.json()
 
     if payload.get("event") != "message_created":
@@ -35,12 +56,10 @@ async def webhook(request: Request):
     conversation = data.get("conversation", {})
     conv_id = conversation.get("id")
 
-    # Check bot-off label from payload first (fast path)
     if BOT_OFF_LABEL in conversation.get("labels", []):
         return {"status": "bot_off"}
 
-    # Double-check via Chatwoot API (labels may have been added after last sync)
-    from integrations.chatwoot import get_labels, send_message
+    from integrations.chatwoot import get_labels
     if BOT_OFF_LABEL in get_labels(conv_id):
         return {"status": "bot_off"}
 
@@ -48,7 +67,6 @@ async def webhook(request: Request):
     if not phone:
         return {"status": "no_phone"}
 
-    # Handle text content and audio attachments
     content = data.get("content", "")
     for att in data.get("attachments", []):
         if not content and att.get("file_type") in ("audio", "audio_file"):
@@ -59,15 +77,5 @@ async def webhook(request: Request):
     if not content:
         return {"status": "empty"}
 
-    from integrations.supabase_client import ensure_patient, save_message, get_messages
-    ensure_patient(phone)
-    save_message(phone, "user", content)
-    history = get_messages(phone, MAX_HISTORY)
-
-    from agent.claude import run_agent
-    response_text = run_agent(history, conv_id)
-
-    save_message(phone, "assistant", response_text)
-    send_message(conv_id, response_text)
-
+    background_tasks.add_task(_process_message, conv_id, phone, content)
     return {"status": "ok"}
