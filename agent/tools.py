@@ -88,5 +88,21 @@ TOOLS = [
             "properties": {"audio_url": {"type": "string"}},
             "required": ["audio_url"]
         }
+    },
+    {
+        "name": "send_confirmation_email",
+        "description": "Envía email de confirmación de cita al paciente. Usar SIEMPRE después de book_appointment o reschedule_appointment.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "patient_name": {"type": "string"},
+                "patient_phone": {"type": "string"},
+                "specialty": {"type": "string"},
+                "start_time": {"type": "string", "description": "ISO 8601"},
+                "booking_uid": {"type": "string"},
+                "is_reschedule": {"type": "boolean", "description": "True si es reagenda, False si es cita nueva"}
+            },
+            "required": ["patient_name", "patient_phone", "specialty", "start_time", "booking_uid"]
+        }
     }
 ]
