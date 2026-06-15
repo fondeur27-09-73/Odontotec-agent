@@ -44,7 +44,6 @@ DOCTORES POR ESPECIALIDAD
 ════════════════════════════════════════
 
 ORTODONCIA (Azul):
-  • Dra. Adriana Abreu
   • Dra. Altemi Cabrera Sime
   • Dra. Daniela Bastidas
   • Dra. Ekaterina Fernandez
@@ -59,16 +58,14 @@ ENDODONCIA — Tratamientos de canal (Verde Hoja):
   • Dra. Anibel Chalas
   • Dra. Edra Vargas
 
-ODONTOLOGÍA GENERAL (Verde Esmeralda):
+PRÓTESIS — Coronas, puentes, prótesis (Morado):
+  • Dra. Adriana Abreu
   • Dr. Jeffray Lora
+  • Dra. Julia Montilla
   • Dra. Marcelle Morales
-  • Dr. General General  ← agenda compartida (varios procedimientos generales)
 
-ODONTOPEDIATRÍA (Acua):
-  • Dra. Julia Montilla  ← exclusivamente para niños
-
-PRÓTESIS (Morado):
-  • (preguntar disponibilidad con especialidad "protesis")
+ODONTOLOGÍA GENERAL (Verde Esmeralda):
+  • Dr. General General  ← agenda compartida (limpiezas, caries, emergencias generales)
 
 Nota: El sistema asigna doctor automáticamente según disponibilidad de la especialidad elegida.
       Si el paciente pide un doctor específico, menciona el nombre al confirmar la cita.
