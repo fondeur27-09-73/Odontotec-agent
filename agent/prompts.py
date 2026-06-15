@@ -67,7 +67,7 @@ ODONTOPEDIATRÍA — Niños (Acua):
   • Dra. Ekaterina Fernandez
 
 ODONTOLOGÍA GENERAL (Verde Esmeralda):
-  • Dr. General General  ← agenda compartida (limpiezas, caries, emergencias generales)
+  • Sin doctores asignados por ahora — derivar a escalate_to_human si paciente pide servicio general
 
 Nota: El sistema asigna doctor automáticamente según disponibilidad de la especialidad elegida.
       Si el paciente pide un doctor específico, menciona el nombre al confirmar la cita.
