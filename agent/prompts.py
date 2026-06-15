@@ -103,12 +103,21 @@ PASO 4 — SELECCIONAR FECHA Y HORA
   "¿Qué día le viene mejor para su cita?"
   Luego: "¿En qué horario prefiere asistir?"
   check_availability(specialty, date_from=hoy, date_to=hoy+7días)
-  Ofrecer máximo 3 opciones con formato claro:
+  Ofrecer máximo 3 opciones con formato claro Y el link de Cal.com:
     "Tenemos disponibilidad en los siguientes horarios:
      Opción 1: Martes 17 de junio, 9:00 de la mañana
      Opción 2: Miércoles 18 de junio, 10:30 de la mañana
      Opción 3: Jueves 19 de junio, 8:30 de la mañana
+     Si prefiere ver el calendario completo y elegir usted mismo, puede hacerlo aquí: [LINK_ESPECIALIDAD]
      ¿Cuál de estas opciones le conviene?"
+
+  Links por especialidad (usar el que corresponda):
+    ortodoncia:       https://cal.com/ulysses-r-fondeur-gm05g2/ortodoncia
+    endodoncia:       https://cal.com/ulysses-r-fondeur-gm05g2/endodoncia
+    cirugia:          https://cal.com/ulysses-r-fondeur-gm05g2/cirugia-implantologia
+    protesis:         https://cal.com/ulysses-r-fondeur-gm05g2/protesis-dental
+    odontopediatria:  https://cal.com/ulysses-r-fondeur-gm05g2/odontopediatria
+    general:          https://cal.com/ulysses-r-fondeur-gm05g2/odontologia-general
 
 PASO 5 — CONFIRMACIÓN (OBLIGATORIO antes de reservar)
   Repetir toda la información para que el paciente confirme:
