@@ -90,6 +90,7 @@ def _send_confirmation_email(
     start_time: str,
     booking_uid: str,
     is_reschedule: bool = False,
+    old_start_time: str = "",
 ) -> dict:
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
@@ -101,21 +102,29 @@ def _send_confirmation_email(
     if not smtp_user or not smtp_pass or not email_to:
         return {"success": False, "reason": "SMTP not configured"}
 
-    try:
-        dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-        days_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-        months_es = [
-            "", "enero", "febrero", "marzo", "abril", "mayo", "junio",
-            "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
-        ]
-        date_str = f"{days_es[dt.weekday()]} {dt.day} de {months_es[dt.month]} de {dt.year}"
-        time_str = dt.strftime("%I:%M %p")
-    except Exception:
-        date_str = start_time
-        time_str = ""
+    def _fmt_dt(iso: str) -> tuple[str, str]:
+        try:
+            d = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            days_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+            months_es = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio",
+                         "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+            return (f"{days_es[d.weekday()]} {d.day} de {months_es[d.month]} de {d.year}",
+                    d.strftime("%I:%M %p"))
+        except Exception:
+            return iso, ""
+
+    date_str, time_str = _fmt_dt(start_time)
+    old_date_str, old_time_str = _fmt_dt(old_start_time) if old_start_time else ("", "")
 
     specialty_label = _SPECIALTY_LABELS.get(specialty, specialty.capitalize())
     action = "Reagenda de Cita" if is_reschedule else "Confirmación de Cita"
+    reschedule_row = ""
+    if is_reschedule and old_date_str:
+        reschedule_row = f"""
+      <tr style="border-bottom:1px solid #ddd;background:#fff3cd;">
+        <td style="padding:10px;color:#666;">Cita anterior</td>
+        <td style="padding:10px;">{old_date_str} — {old_time_str}</td>
+      </tr>"""
 
     subject = f"Odontotec — {action}: {patient_name}"
     body = f"""
@@ -125,31 +134,31 @@ def _send_confirmation_email(
     <p style="color:#cce4ff;margin:4px 0 0;">Arroyo Hondo, Santo Domingo, RD</p>
   </div>
   <div style="background:#f9f9f9;padding:24px;border-radius:0 0 8px 8px;">
-    <h3 style="color:#1a6db5;">{'✅ Cita Reagendada' if is_reschedule else '✅ Cita Confirmada'}</h3>
+    <h3 style="color:#1a6db5;">{"Cita Reagendada" if is_reschedule else "Cita Confirmada"}</h3>
     <p>Estimado/a <strong>{patient_name}</strong>,</p>
-    <p>{"Su cita ha sido reagendada exitosamente." if is_reschedule else "Su cita ha sido confirmada exitosamente."} A continuación los detalles:</p>
-    <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+    <p>{"Su cita ha sido reagendada exitosamente." if is_reschedule else "Su cita ha sido confirmada exitosamente."} A continuacion los detalles:</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;">{reschedule_row}
       <tr style="border-bottom:1px solid #ddd;">
-        <td style="padding:10px;color:#666;">📋 Especialidad</td>
+        <td style="padding:10px;color:#666;">Especialidad</td>
         <td style="padding:10px;font-weight:bold;">{specialty_label}</td>
       </tr>
       <tr style="border-bottom:1px solid #ddd;">
-        <td style="padding:10px;color:#666;">📅 Fecha</td>
+        <td style="padding:10px;color:#666;">{"Nueva fecha" if is_reschedule else "Fecha"}</td>
         <td style="padding:10px;font-weight:bold;">{date_str}</td>
       </tr>
       <tr style="border-bottom:1px solid #ddd;">
-        <td style="padding:10px;color:#666;">🕐 Hora</td>
+        <td style="padding:10px;color:#666;">Hora</td>
         <td style="padding:10px;font-weight:bold;">{time_str}</td>
       </tr>
       <tr>
-        <td style="padding:10px;color:#666;">📍 Dirección</td>
+        <td style="padding:10px;color:#666;">Direccion</td>
         <td style="padding:10px;font-weight:bold;">Arroyo Hondo, Santo Domingo</td>
       </tr>
     </table>
-    <p style="background:#fff3cd;padding:12px;border-radius:6px;border-left:4px solid #ffc107;">
-      ⏰ Por favor llegue <strong>5 minutos antes</strong> de su cita.
+    <p style="background:#e8f4fd;padding:12px;border-radius:6px;border-left:4px solid #1a6db5;">
+      Por favor llegue <strong>5 minutos antes</strong> de su cita.
     </p>
-    <p>Si necesita reagendar o tiene alguna pregunta, contáctenos por WhatsApp: <strong>+1 809-977-9329</strong></p>
+    <p>Para reagendar o consultas, contactenos por WhatsApp: <strong>+1 809-977-9329</strong></p>
     <hr style="margin:20px 0;border:none;border-top:1px solid #eee;">
     <p style="color:#999;font-size:12px;">Ref: {booking_uid} | Tel paciente: {patient_phone}</p>
   </div>

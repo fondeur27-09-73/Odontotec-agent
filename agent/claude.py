@@ -135,7 +135,8 @@ OPENAI_TOOLS = [
                     "specialty": {"type": "string"},
                     "start_time": {"type": "string", "description": "ISO 8601"},
                     "booking_uid": {"type": "string"},
-                    "is_reschedule": {"type": "boolean", "description": "True si es reagenda, False si es cita nueva"}
+                    "is_reschedule": {"type": "boolean", "description": "True si es reagenda, False si es cita nueva"},
+                    "old_start_time": {"type": "string", "description": "ISO 8601 — fecha/hora anterior (solo para reagendas)"}
                 },
                 "required": ["patient_name", "patient_phone", "specialty", "start_time", "booking_uid"]
             }
