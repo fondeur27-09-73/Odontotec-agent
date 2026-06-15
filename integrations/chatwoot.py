@@ -18,7 +18,7 @@ def send_message(conversation_id: int, content: str) -> dict:
     r = httpx.post(
         _conv_url(conversation_id, "messages"),
         headers=_headers(),
-        json={"content": content, "message_type": "outgoing", "private": False},
+        json={"content": content, "message_type": 1, "private": False},
         timeout=10
     )
     r.raise_for_status()

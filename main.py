@@ -29,7 +29,7 @@ async def webhook(request: Request):
         return {"status": "ignored"}
 
     data = payload.get("data", {})
-    if data.get("message_type") != 0:
+    if int(data.get("message_type", -1)) != 0:
         return {"status": "ignored"}
 
     conversation = data.get("conversation", {})
