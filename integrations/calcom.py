@@ -11,7 +11,7 @@ def _attendee_email(patient_phone: str) -> str:
     (Cal.com envía notificaciones automáticas a esta dirección) — por eso se
     usa plus-addressing sobre el correo real de la clínica en vez de un
     dominio inventado como @odontotec.bot, que rebota."""
-    clinic_email = os.getenv("EMAIL_CLINIC", "odontotec@gmail.com")
+    clinic_email = os.getenv("EMAIL_CLINIC", "contactoodontotec@gmail.com")
     local, _, domain = clinic_email.partition("@")
     phone_clean = patient_phone.replace("+", "")
     return f"{local}+{phone_clean}@{domain}"
