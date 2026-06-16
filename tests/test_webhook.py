@@ -48,16 +48,11 @@ def test_ignores_non_message_event():
     assert client.post("/webhook", json={"event": "other"}).json()["status"] == "ignored"
 
 
-def test_respects_bot_off_from_payload():
+def test_ignores_bot_off_label():
     payload = {**PAYLOAD, "data": {**PAYLOAD["data"], "conversation": {
         **PAYLOAD["data"]["conversation"], "labels": ["bot-off"]
     }}}
-    assert client.post("/webhook", json=payload).json()["status"] == "bot_off"
-
-
-def test_respects_bot_off_from_api():
-    with patch("integrations.chatwoot.get_labels", return_value=["bot-off"]):
-        assert client.post("/webhook", json=PAYLOAD).json()["status"] == "bot_off"
+    assert client.post("/webhook", json=payload).json()["status"] == "ok"
 
 
 def test_processes_message():

@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
-BOT_OFF_LABEL = os.getenv("BOT_OFF_LABEL", "bot-off")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("odontotec")
@@ -82,13 +81,6 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     conversation = data.get("conversation", {})
     conv_id = conversation.get("id")
-
-    if BOT_OFF_LABEL in conversation.get("labels", []):
-        return {"status": "bot_off"}
-
-    from integrations.chatwoot import get_labels
-    if BOT_OFF_LABEL in get_labels(conv_id):
-        return {"status": "bot_off"}
 
     phone = conversation.get("meta", {}).get("sender", {}).get("phone_number")
     if not phone:
