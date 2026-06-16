@@ -4,10 +4,10 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
-from integrations import calcom, chatwoot
+from integrations import calcom, chatwoot, db
 from utils.audio import transcribe_audio as _transcribe
 
-_patients: dict[str, str] = {}  # phone → name (in-memory)
+db.init_db()
 
 
 def handle_tool(tool_name: str, tool_input: dict) -> str:
@@ -37,7 +37,7 @@ def _check_availability(specialty: str, date_from: str, date_to: str) -> dict:
 
 def _book_appointment(patient_phone: str, patient_name: str, specialty: str, start_time: str) -> dict:
     if patient_name:
-        _patients[patient_phone] = patient_name
+        db.save_patient(patient_phone, name=patient_name)
     booking = calcom.book_appointment(patient_phone, patient_name, specialty, start_time)
     return {"success": True, "booking_uid": booking["uid"], "start_time": booking["startTime"]}
 
@@ -52,15 +52,15 @@ def _get_patient_appointments(patient_phone: str) -> dict:
 
 
 def _get_patient(phone: str) -> dict:
-    name = _patients.get(phone)
-    if name:
-        return {"found": True, "name": name, "phone": phone}
+    patient = db.get_patient(phone)
+    if patient:
+        return {"found": True, "phone": phone, **patient}
     return {"found": False}
 
 
-def _save_patient(phone: str, name: str) -> dict:
-    _patients[phone] = name
-    return {"success": True, "patient": {"phone": phone, "name": name}}
+def _save_patient(phone: str, name: str, cedula: str = "") -> dict:
+    saved = db.save_patient(phone, name=name, cedula=cedula)
+    return {"success": True, "patient": {"phone": phone, **saved}}
 
 
 def _escalate_to_human(reason: str, conversation_id: int) -> dict:

@@ -6,14 +6,14 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Santo_Domingo")
 _CAL_API = "https://api.cal.com"
 
 
-def _headers() -> dict:
+def _headers(version: str) -> dict:
     key = os.getenv("CALCOM_API_KEY")
     if not key:
         raise RuntimeError("CALCOM_API_KEY not set")
     return {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
-        "cal-api-version": "2024-09-04"
+        "cal-api-version": version
     }
 
 
@@ -35,7 +35,7 @@ def _check_response(body: dict, context: str) -> dict:
 def check_availability(specialty: str, date_from: str, date_to: str) -> dict:
     r = httpx.get(
         f"{_CAL_API}/v2/slots",
-        headers=_headers(),
+        headers=_headers("2024-09-04"),
         params={
             "eventTypeId": _event_id(specialty),
             "start": f"{date_from}T00:00:00",
@@ -51,7 +51,7 @@ def check_availability(specialty: str, date_from: str, date_to: str) -> dict:
 def book_appointment(patient_phone: str, patient_name: str, specialty: str, start_time: str) -> dict:
     r = httpx.post(
         f"{_CAL_API}/v2/bookings",
-        headers=_headers(),
+        headers=_headers("2026-02-25"),
         json={
             "eventTypeId": _event_id(specialty),
             "start": start_time,
@@ -69,9 +69,9 @@ def book_appointment(patient_phone: str, patient_name: str, specialty: str, star
 
 
 def reschedule_appointment(booking_uid: str, new_start_time: str) -> dict:
-    r = httpx.patch(
+    r = httpx.post(
         f"{_CAL_API}/v2/bookings/{booking_uid}/reschedule",
-        headers=_headers(),
+        headers=_headers("2026-02-25"),
         json={"start": new_start_time},
         timeout=10
     )
@@ -83,18 +83,18 @@ def get_patient_bookings(patient_phone: str) -> list[dict]:
     email = f"{patient_phone.replace('+', '')}@odontotec.bot"
     r = httpx.get(
         f"{_CAL_API}/v2/bookings",
-        headers=_headers(),
-        params={"attendeeEmail": email},
+        headers=_headers("2026-05-01"),
+        params={"attendeeEmail": email, "status": "upcoming"},
         timeout=10
     )
     r.raise_for_status()
-    return r.json().get("data", {}).get("bookings", [])
+    return r.json().get("items", [])
 
 
 def get_upcoming_bookings(date_str: str) -> list[dict]:
     r = httpx.get(
         f"{_CAL_API}/v2/bookings",
-        headers=_headers(),
+        headers=_headers("2026-05-01"),
         params={
             "afterStart": f"{date_str}T00:00:00",
             "beforeEnd": f"{date_str}T23:59:59",
@@ -103,4 +103,4 @@ def get_upcoming_bookings(date_str: str) -> list[dict]:
         timeout=10
     )
     r.raise_for_status()
-    return r.json().get("data", {}).get("bookings", [])
+    return r.json().get("items", [])
