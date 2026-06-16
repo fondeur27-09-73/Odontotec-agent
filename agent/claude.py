@@ -166,27 +166,44 @@ def run_agent(history: list[dict], conversation_id: int) -> str:
     messages += [{"role": m["role"], "content": m["content"]} for m in history]
     model = os.getenv("OPENAI_MODEL", "gpt-4o")
 
+    booked = None       # cache del primer book_appointment exitoso (anti-duplicado)
+    force_final = False  # tras enviar correo, forzar mensaje de cierre (anti-bucle)
+
     for _ in range(MAX_ITERATIONS):
         response = _get_client().chat.completions.create(
             model=model,
             messages=messages,
             tools=OPENAI_TOOLS,
-            tool_choice="auto",
+            tool_choice="none" if force_final else "auto",
             timeout=60
         )
 
         msg = response.choices[0].message
 
-        if msg.tool_calls:
+        if msg.tool_calls and not force_final:
             messages.append(msg)
             for tc in msg.tool_calls:
                 args = json.loads(tc.function.arguments)
-                result = handle_tool(tc.function.name, args)
+                name = tc.function.name
+                if name == "book_appointment" and booked is not None:
+                    # Idempotente: ya se reservó con éxito, no reservar de nuevo.
+                    result = booked
+                else:
+                    result = handle_tool(name, args)
+                    if name == "book_appointment":
+                        try:
+                            if json.loads(result).get("success"):
+                                booked = result
+                        except Exception:
+                            pass
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": str(result)
                 })
+                # Tras el correo, el único paso restante es el cierre: forzar texto.
+                if name == "send_confirmation_email":
+                    force_final = True
         else:
             return msg.content or ""
 
