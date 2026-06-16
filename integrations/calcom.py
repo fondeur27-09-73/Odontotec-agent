@@ -6,6 +6,17 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Santo_Domingo")
 _CAL_API = "https://api.cal.com"
 
 
+def _attendee_email(patient_phone: str) -> str:
+    """Email de attendee para Cal.com. Debe ser un dominio real y entregable
+    (Cal.com envía notificaciones automáticas a esta dirección) — por eso se
+    usa plus-addressing sobre el correo real de la clínica en vez de un
+    dominio inventado como @odontotec.bot, que rebota."""
+    clinic_email = os.getenv("EMAIL_CLINIC", "odontotec@gmail.com")
+    local, _, domain = clinic_email.partition("@")
+    phone_clean = patient_phone.replace("+", "")
+    return f"{local}+{phone_clean}@{domain}"
+
+
 def _headers(version: str) -> dict:
     key = os.getenv("CALCOM_API_KEY")
     if not key:
@@ -57,7 +68,7 @@ def book_appointment(patient_phone: str, patient_name: str, specialty: str, star
             "start": start_time,
             "attendee": {
                 "name": patient_name,
-                "email": f"{patient_phone.replace('+', '')}@odontotec.bot",
+                "email": _attendee_email(patient_phone),
                 "timeZone": TIMEZONE,
                 "language": "es"
             }
@@ -80,7 +91,7 @@ def reschedule_appointment(booking_uid: str, new_start_time: str) -> dict:
 
 
 def get_patient_bookings(patient_phone: str) -> list[dict]:
-    email = f"{patient_phone.replace('+', '')}@odontotec.bot"
+    email = _attendee_email(patient_phone)
     r = httpx.get(
         f"{_CAL_API}/v2/bookings",
         headers=_headers("2026-05-01"),

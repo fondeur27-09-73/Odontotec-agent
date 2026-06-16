@@ -10,8 +10,15 @@ os.environ.setdefault("TIMEZONE", "America/Santo_Domingo")
 
 from integrations.calcom import (
     check_availability, book_appointment, reschedule_appointment,
-    get_patient_bookings, get_upcoming_bookings
+    get_patient_bookings, get_upcoming_bookings, _attendee_email
 )
+
+
+def test_attendee_email_uses_real_deliverable_domain():
+    os.environ["EMAIL_CLINIC"] = "odontotec@gmail.com"
+    email = _attendee_email("+18099879329")
+    assert email == "odontotec+18099879329@gmail.com"
+    assert "odontotec.bot" not in email
 
 
 @respx.mock

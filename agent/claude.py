@@ -84,12 +84,13 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "save_patient",
-            "description": "Guarda o actualiza nombre del paciente.",
+            "description": "Guarda o actualiza nombre y cédula del paciente.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "phone": {"type": "string"},
-                    "name": {"type": "string"}
+                    "name": {"type": "string"},
+                    "cedula": {"type": "string", "description": "Número de cédula del paciente"}
                 },
                 "required": ["phone", "name"]
             }

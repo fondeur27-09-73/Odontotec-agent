@@ -44,3 +44,9 @@ def test_run_agent_executes_tool():
         result = run_agent([{"role": "user", "content": "Hola"}], 42)
         mock_tool.assert_called_once_with("get_patient", {"phone": "+18491234567"})
         assert "Juan" in result
+
+
+def test_save_patient_tool_schema_includes_cedula():
+    from agent.claude import OPENAI_TOOLS
+    save_patient_tool = next(t for t in OPENAI_TOOLS if t["function"]["name"] == "save_patient")
+    assert "cedula" in save_patient_tool["function"]["parameters"]["properties"]
