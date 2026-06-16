@@ -28,19 +28,34 @@ app = FastAPI(title="Odontotec Agent", lifespan=lifespan)
 def health():
     return {"status": "ok"}
 
+def _build_history(conv_id: int) -> list[dict]:
+    from integrations.chatwoot import get_conv_messages
+    try:
+        msgs = get_conv_messages(conv_id)
+    except Exception:
+        return []
+    history = []
+    for m in msgs:
+        mt = m.get("message_type")
+        content = m.get("content") or ""
+        if not content:
+            continue
+        if mt == 0:
+            history.append({"role": "user", "content": content})
+        elif mt == 1:
+            history.append({"role": "assistant", "content": content})
+    return history[-MAX_HISTORY:]
+
 async def _process_message(conv_id: int, phone: str, content: str):
     try:
-        from integrations.supabase_client import ensure_patient, save_message, get_messages
         from integrations.chatwoot import send_message
         from agent.claude import run_agent
 
-        ensure_patient(phone)
-        save_message(phone, "user", content)
-        history = get_messages(phone, MAX_HISTORY)
+        history = _build_history(conv_id)
+        if not history or history[-1].get("role") != "user" or history[-1].get("content") != content:
+            history.append({"role": "user", "content": content})
 
         response_text = await asyncio.to_thread(run_agent, history, conv_id)
-
-        save_message(phone, "assistant", response_text)
         send_message(conv_id, response_text)
     except Exception as e:
         logger.error(f"Error processing message conv={conv_id} phone={phone}: {e}", exc_info=True)

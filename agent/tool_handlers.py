@@ -4,8 +4,10 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
-from integrations import calcom, supabase_client, chatwoot
+from integrations import calcom, chatwoot
 from utils.audio import transcribe_audio as _transcribe
+
+_patients: dict[str, str] = {}  # phone → name (in-memory)
 
 
 def handle_tool(tool_name: str, tool_input: dict) -> str:
@@ -34,21 +36,14 @@ def _check_availability(specialty: str, date_from: str, date_to: str) -> dict:
 
 
 def _book_appointment(patient_phone: str, patient_name: str, specialty: str, start_time: str) -> dict:
-    supabase_client.ensure_patient(patient_phone, patient_name)
+    if patient_name:
+        _patients[patient_phone] = patient_name
     booking = calcom.book_appointment(patient_phone, patient_name, specialty, start_time)
-    supabase_client.save_reminder(
-        cal_uid=booking["uid"],
-        phone=patient_phone,
-        doctor=booking.get("hosts", [{}])[0].get("name", "") if booking.get("hosts") else "",
-        specialty=specialty,
-        appt_at=booking["startTime"]
-    )
     return {"success": True, "booking_uid": booking["uid"], "start_time": booking["startTime"]}
 
 
 def _reschedule_appointment(booking_uid: str, new_start_time: str) -> dict:
     booking = calcom.reschedule_appointment(booking_uid, new_start_time)
-    supabase_client.update_reminder_status(booking_uid, "rescheduled")
     return {"success": True, "new_start_time": booking["startTime"]}
 
 
@@ -57,11 +52,15 @@ def _get_patient_appointments(patient_phone: str) -> dict:
 
 
 def _get_patient(phone: str) -> dict:
-    return supabase_client.get_patient(phone) or {"found": False}
+    name = _patients.get(phone)
+    if name:
+        return {"found": True, "name": name, "phone": phone}
+    return {"found": False}
 
 
 def _save_patient(phone: str, name: str) -> dict:
-    return {"success": True, "patient": supabase_client.ensure_patient(phone, name)}
+    _patients[phone] = name
+    return {"success": True, "patient": {"phone": phone, "name": name}}
 
 
 def _escalate_to_human(reason: str, conversation_id: int) -> dict:

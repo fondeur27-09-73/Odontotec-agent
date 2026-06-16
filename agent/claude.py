@@ -148,10 +148,14 @@ OPENAI_TOOLS = [
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        key = os.getenv("OPENAI_API_KEY")
-        if not key:
-            raise RuntimeError("OPENAI_API_KEY not set")
-        _client = OpenAI(api_key=key)
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if openrouter_key:
+            _client = OpenAI(api_key=openrouter_key, base_url="https://openrouter.ai/api/v1")
+        elif openai_key:
+            _client = OpenAI(api_key=openai_key)
+        else:
+            raise RuntimeError("OPENROUTER_API_KEY or OPENAI_API_KEY not set")
     return _client
 
 
