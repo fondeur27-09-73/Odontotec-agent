@@ -10,6 +10,7 @@ load_dotenv()
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
 BOT_OFF_LABEL = os.getenv("BOT_OFF_LABEL", "bot-off")
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("odontotec")
 
 _scheduler = None
@@ -47,6 +48,7 @@ def _build_history(conv_id: int) -> list[dict]:
     return history[-MAX_HISTORY:]
 
 async def _process_message(conv_id: int, phone: str, content: str):
+    logger.info(f"_process_message start conv={conv_id} phone={phone} content={content!r}")
     try:
         from integrations.chatwoot import send_message
         from agent.claude import run_agent
@@ -56,19 +58,26 @@ async def _process_message(conv_id: int, phone: str, content: str):
             history.append({"role": "user", "content": content})
 
         response_text = await asyncio.to_thread(run_agent, history, conv_id)
+        logger.info(f"_process_message response conv={conv_id}: {response_text!r}")
         send_message(conv_id, response_text)
+        logger.info(f"_process_message sent conv={conv_id}")
     except Exception as e:
         logger.error(f"Error processing message conv={conv_id} phone={phone}: {e}", exc_info=True)
+
+def _is_incoming(message_type) -> bool:
+    return message_type == 0 or message_type == "incoming"
 
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
     payload = await request.json()
+    logger.info(f"webhook payload: {payload}")
 
     if payload.get("event") != "message_created":
         return {"status": "ignored"}
 
-    data = payload.get("data", {})
-    if int(data.get("message_type", -1)) != 0:
+    # Chatwoot sends message fields at the payload root, not nested under "data"
+    data = payload.get("data") or payload
+    if not _is_incoming(data.get("message_type")):
         return {"status": "ignored"}
 
     conversation = data.get("conversation", {})
