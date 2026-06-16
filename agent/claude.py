@@ -171,7 +171,8 @@ def run_agent(history: list[dict], conversation_id: int) -> str:
             model=model,
             messages=messages,
             tools=OPENAI_TOOLS,
-            tool_choice="auto"
+            tool_choice="auto",
+            timeout=60
         )
 
         msg = response.choices[0].message
