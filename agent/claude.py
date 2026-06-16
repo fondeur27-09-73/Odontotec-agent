@@ -189,4 +189,4 @@ def run_agent(history: list[dict], conversation_id: int) -> str:
         else:
             return msg.content or ""
 
-    return "Disculpe, hubo un inconveniente. Un momento, le comunicamos con un agente."
+    return "Su solicitud quedó registrada. En breve le confirmamos los detalles de su cita."

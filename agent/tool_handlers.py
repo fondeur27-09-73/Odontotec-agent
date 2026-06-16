@@ -170,9 +170,14 @@ def _send_confirmation_email(
     msg["To"] = email_to
     msg.attach(MIMEText(body, "html", "utf-8"))
 
-    with smtplib.SMTP(smtp_host, smtp_port) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(email_from, [email_to], msg.as_string())
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(email_from, [email_to], msg.as_string())
+    except Exception as e:
+        # El correo es best-effort: la cita ya está reservada en Cal.com.
+        # NUNCA propagar — un fallo de correo no debe romper el turno ni escalar al paciente.
+        return {"success": False, "reason": str(e)}
 
     return {"success": True, "sent_to": email_to}
