@@ -4,23 +4,21 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
-from integrations import calcom, chatwoot, db
+from integrations import chatwoot, db
 from utils.audio import transcribe_audio as _transcribe
 
 db.init_db()
 
 
+# MODO PRUEBA: Cal.com retirado. Carla NO reserva ni reagenda en ningún sistema
+# externo hasta que Dentidesk esté conectado. Solo lee/guarda paciente local,
+# transcribe audio y escala.
 def handle_tool(tool_name: str, tool_input: dict) -> str:
     handlers = {
-        "check_availability": _check_availability,
-        "book_appointment": _book_appointment,
-        "reschedule_appointment": _reschedule_appointment,
-        "get_patient_appointments": _get_patient_appointments,
         "get_patient": _get_patient,
         "save_patient": _save_patient,
         "escalate_to_human": _escalate_to_human,
         "transcribe_audio": _transcribe_audio,
-        "send_confirmation_email": _send_confirmation_email,
     }
     handler = handlers.get(tool_name)
     if not handler:
@@ -29,26 +27,6 @@ def handle_tool(tool_name: str, tool_input: dict) -> str:
         return json.dumps(handler(**tool_input), ensure_ascii=False, default=str)
     except Exception as e:
         return json.dumps({"error": str(e)})
-
-
-def _check_availability(specialty: str, date_from: str, date_to: str) -> dict:
-    return {"slots": calcom.check_availability(specialty, date_from, date_to)}
-
-
-def _book_appointment(patient_phone: str, patient_name: str, specialty: str, start_time: str) -> dict:
-    if patient_name:
-        db.save_patient(patient_phone, name=patient_name)
-    booking = calcom.book_appointment(patient_phone, patient_name, specialty, start_time)
-    return {"success": True, "booking_uid": booking["uid"], "start_time": booking["startTime"]}
-
-
-def _reschedule_appointment(booking_uid: str, new_start_time: str) -> dict:
-    booking = calcom.reschedule_appointment(booking_uid, new_start_time)
-    return {"success": True, "new_start_time": booking["startTime"]}
-
-
-def _get_patient_appointments(patient_phone: str) -> dict:
-    return {"bookings": calcom.get_patient_bookings(patient_phone)}
 
 
 def _get_patient(phone: str) -> dict:

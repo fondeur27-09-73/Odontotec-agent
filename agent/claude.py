@@ -10,72 +10,16 @@ MAX_ITERATIONS = 10
 _client = None
 
 # OpenAI tool schemas (same logic as Anthropic but different format)
+# MODO PRUEBA: las herramientas de reserva (Cal.com) y correo fueron retiradas a
+# propósito. El agente NO registra citas en ningún sistema externo hasta que
+# Dentidesk esté conectado. Solo persiste nombre/cédula localmente (SQLite) para
+# no volver a preguntarlos, transcribe audio y puede escalar.
 OPENAI_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "check_availability",
-            "description": "Verifica slots disponibles para una especialidad dental en un rango de fechas.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "specialty": {"type": "string", "description": "general|ortodoncia|endodoncia|cirugia|protesis|odontopediatria"},
-                    "date_from": {"type": "string", "description": "YYYY-MM-DD"},
-                    "date_to": {"type": "string", "description": "YYYY-MM-DD"}
-                },
-                "required": ["specialty", "date_from", "date_to"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "book_appointment",
-            "description": "Reserva una cita para el paciente.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "patient_phone": {"type": "string"},
-                    "patient_name": {"type": "string"},
-                    "specialty": {"type": "string"},
-                    "start_time": {"type": "string", "description": "ISO 8601: 2026-06-15T08:30:00.000Z"}
-                },
-                "required": ["patient_phone", "patient_name", "specialty", "start_time"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "reschedule_appointment",
-            "description": "Reagenda una cita existente. NUNCA cancela, siempre mueve hacia adelante.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "booking_uid": {"type": "string"},
-                    "new_start_time": {"type": "string", "description": "ISO 8601"}
-                },
-                "required": ["booking_uid", "new_start_time"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_patient_appointments",
-            "description": "Obtiene citas activas del paciente.",
-            "parameters": {
-                "type": "object",
-                "properties": {"patient_phone": {"type": "string"}},
-                "required": ["patient_phone"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_patient",
-            "description": "Busca información del paciente en base de datos.",
+            "description": "Busca nombre y cédula del paciente en base de datos local por teléfono.",
             "parameters": {
                 "type": "object",
                 "properties": {"phone": {"type": "string"}},
@@ -87,7 +31,7 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "save_patient",
-            "description": "Guarda o actualiza nombre y cédula del paciente.",
+            "description": "Guarda o actualiza nombre y cédula del paciente en base de datos local.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -96,21 +40,6 @@ OPENAI_TOOLS = [
                     "cedula": {"type": "string", "description": "Número de cédula del paciente"}
                 },
                 "required": ["phone", "name"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "escalate_to_human",
-            "description": "Transfiere la conversación a Carla o Helen. Usar cuando no puedas resolver.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {"type": "string", "description": "recado|consulta_compleja|queja|otro"},
-                    "conversation_id": {"type": "integer"}
-                },
-                "required": ["reason", "conversation_id"]
             }
         }
     },
@@ -129,20 +58,15 @@ OPENAI_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "send_confirmation_email",
-            "description": "Envía email de confirmación de cita al paciente. Usar SIEMPRE después de book_appointment o reschedule_appointment.",
+            "name": "escalate_to_human",
+            "description": "Transfiere la conversación a un humano. Usar solo si el paciente lo pide explícitamente o está molesto.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "patient_name": {"type": "string"},
-                    "patient_phone": {"type": "string"},
-                    "specialty": {"type": "string"},
-                    "start_time": {"type": "string", "description": "ISO 8601"},
-                    "booking_uid": {"type": "string"},
-                    "is_reschedule": {"type": "boolean", "description": "True si es reagenda, False si es cita nueva"},
-                    "old_start_time": {"type": "string", "description": "ISO 8601 — fecha/hora anterior (solo para reagendas)"}
+                    "reason": {"type": "string", "description": "recado|consulta_compleja|queja|otro"},
+                    "conversation_id": {"type": "integer"}
                 },
-                "required": ["patient_name", "patient_phone", "specialty", "start_time", "booking_uid"]
+                "required": ["reason", "conversation_id"]
             }
         }
     }
@@ -163,9 +87,14 @@ def _get_client() -> OpenAI:
     return _client
 
 
-def run_agent(history: list[dict], conversation_id: int) -> str:
+def run_agent(history: list[dict], conversation_id: int, patient_phone: str = "") -> str:
     import json
-    messages = [{"role": "system", "content": SYSTEM_PROMPT.replace("{conversation_id}", str(conversation_id))}]
+    system = (
+        SYSTEM_PROMPT
+        .replace("{conversation_id}", str(conversation_id))
+        .replace("{patient_phone}", patient_phone or "desconocido")
+    )
+    messages = [{"role": "system", "content": system}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history]
     model = os.getenv("OPENAI_MODEL", "gpt-4o")
     if "=" in model:
@@ -175,45 +104,28 @@ def run_agent(history: list[dict], conversation_id: int) -> str:
         )
     logger.info(f"run_agent using model={model!r}")
 
-    booked = None       # cache del primer book_appointment exitoso (anti-duplicado)
-    force_final = False  # tras enviar correo, forzar mensaje de cierre (anti-bucle)
-
     for _ in range(MAX_ITERATIONS):
         response = _get_client().chat.completions.create(
             model=model,
             messages=messages,
             tools=OPENAI_TOOLS,
-            tool_choice="none" if force_final else "auto",
+            tool_choice="auto",
             timeout=60
         )
 
         msg = response.choices[0].message
 
-        if msg.tool_calls and not force_final:
+        if msg.tool_calls:
             messages.append(msg)
             for tc in msg.tool_calls:
                 args = json.loads(tc.function.arguments)
-                name = tc.function.name
-                if name == "book_appointment" and booked is not None:
-                    # Idempotente: ya se reservó con éxito, no reservar de nuevo.
-                    result = booked
-                else:
-                    result = handle_tool(name, args)
-                    if name == "book_appointment":
-                        try:
-                            if json.loads(result).get("success"):
-                                booked = result
-                        except Exception:
-                            pass
+                result = handle_tool(tc.function.name, args)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": str(result)
                 })
-                # Tras el correo, el único paso restante es el cierre: forzar texto.
-                if name == "send_confirmation_email":
-                    force_final = True
         else:
             return msg.content or ""
 
-    return "Su solicitud quedó registrada. En breve le confirmamos los detalles de su cita."
+    return "Con gusto. Permítame un momento para ayudarle con su solicitud."

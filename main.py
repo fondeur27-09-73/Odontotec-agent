@@ -56,7 +56,7 @@ async def _process_message(conv_id: int, phone: str, content: str):
         if not history or history[-1].get("role") != "user" or history[-1].get("content") != content:
             history.append({"role": "user", "content": content})
 
-        response_text = await asyncio.to_thread(run_agent, history, conv_id)
+        response_text = await asyncio.to_thread(run_agent, history, conv_id, phone)
         logger.info(f"_process_message response conv={conv_id}: {response_text!r}")
         send_message(conv_id, response_text)
         logger.info(f"_process_message sent conv={conv_id}")
