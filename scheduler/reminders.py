@@ -33,9 +33,8 @@ def send_nightly_reminders():
         display_time = start[11:16] if len(start) >= 16 else ""
 
         msg = (
-            f"Hola {name}, le recordamos su cita en Odontotec "
-            f"mañana {display_date} a las {display_time}. "
-            f"¿Confirma asistencia? Responda SÍ o NO."
+            f"Buen día/Buenas tardes {name}, soy Carla de Odonto-Tec, le contacto para confirmar "
+            f"su cita para el día {display_date} a las {display_time}. Por aquí le esperamos."
         )
         print(f"[reminders] {phone}: {msg}")
 
