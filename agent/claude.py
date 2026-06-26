@@ -1,7 +1,10 @@
 import os
+import logging
 from openai import OpenAI
 from agent.prompts import SYSTEM_PROMPT
 from agent.tool_handlers import handle_tool
+
+logger = logging.getLogger("odontotec.agent")
 
 MAX_ITERATIONS = 10
 _client = None
@@ -165,6 +168,12 @@ def run_agent(history: list[dict], conversation_id: int) -> str:
     messages = [{"role": "system", "content": SYSTEM_PROMPT.replace("{conversation_id}", str(conversation_id))}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history]
     model = os.getenv("OPENAI_MODEL", "gpt-4o")
+    if "=" in model:
+        raise RuntimeError(
+            f"OPENAI_MODEL env var malformed (contains '='): {model!r} — "
+            f"editaron la variable pegando 'OPENAI_MODEL=valor' en vez de solo 'valor'"
+        )
+    logger.info(f"run_agent using model={model!r}")
 
     booked = None       # cache del primer book_appointment exitoso (anti-duplicado)
     force_final = False  # tras enviar correo, forzar mensaje de cierre (anti-bucle)
