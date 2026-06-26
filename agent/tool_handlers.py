@@ -50,6 +50,8 @@ def _register_appointment(
     time: str,
     cedula: str = "",
     estado: str = "Confirmada",
+    procedimiento: str = "",
+    fecha_iso: str = "",
 ) -> dict:
     label = _SPECIALTY_LABELS.get(specialty, specialty)
     res = airtable.register_appointment(
@@ -60,6 +62,8 @@ def _register_appointment(
         time=time,
         cedula=cedula,
         estado=estado,
+        procedimiento=procedimiento,
+        fecha_iso=fecha_iso,
     )
     return {"success": True, **res}
 

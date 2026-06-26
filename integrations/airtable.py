@@ -25,6 +25,8 @@ def register_appointment(
     time: str,
     cedula: str = "",
     estado: str = "Confirmada",
+    procedimiento: str = "",
+    fecha_iso: str = "",
 ) -> dict:
     """Crea una fila de cita en Airtable. Devuelve el record id."""
     key, base, table = _cfg()
@@ -33,11 +35,14 @@ def register_appointment(
         "Cedula": cedula,
         "Telefono": patient_phone,
         "Especialidad": specialty,
+        "Procedimiento": procedimiento,
         "Dia": day,
         "Hora": time,
         "Estado": estado,
         "Creado": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
+    if fecha_iso:
+        fields["Fecha"] = fecha_iso
     r = httpx.post(
         f"{_API}/{base}/{table}",
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},

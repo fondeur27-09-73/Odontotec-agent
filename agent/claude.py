@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import datetime
 from openai import OpenAI
 from agent.prompts import SYSTEM_PROMPT
 from agent.tool_handlers import handle_tool
@@ -55,10 +56,12 @@ OPENAI_TOOLS = [
                     "patient_phone": {"type": "string", "description": "Teléfono del paciente"},
                     "cedula": {"type": "string", "description": "Cédula del paciente"},
                     "specialty": {"type": "string", "description": "general|ortodoncia|endodoncia|cirugia|protesis|odontopediatria"},
+                    "procedimiento": {"type": "string", "description": "Tratamiento concreto que pidió el paciente, en palabras: ej 'Limpieza dental', 'Extracción de muela', 'Tratamiento de canal', 'Brackets'"},
                     "day": {"type": "string", "description": "Día de la cita en texto, ej: sábado 27 de junio"},
-                    "time": {"type": "string", "description": "Hora de la cita, ej: 10:00 AM"}
+                    "time": {"type": "string", "description": "Hora de la cita, ej: 10:00 AM"},
+                    "fecha_iso": {"type": "string", "description": "Fecha de la cita en formato ISO YYYY-MM-DD, calculada a partir de la fecha de hoy indicada en el prompt. Ej: 2026-06-29"}
                 },
-                "required": ["patient_name", "patient_phone", "specialty", "day", "time"]
+                "required": ["patient_name", "patient_phone", "specialty", "procedimiento", "day", "time", "fecha_iso"]
             }
         }
     },
@@ -106,12 +109,26 @@ def _get_client() -> OpenAI:
     return _client
 
 
+def _today_str() -> str:
+    """Fecha de hoy en la zona horaria de la clínica, ej: 'jueves 26 de junio de 2026 (2026-06-26)'."""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(os.getenv("TIMEZONE", "America/Santo_Domingo")))
+    except Exception:
+        now = datetime.now()
+    dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    meses = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+             "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+    return f"{dias[now.weekday()]} {now.day} de {meses[now.month]} de {now.year} ({now:%Y-%m-%d})"
+
+
 def run_agent(history: list[dict], conversation_id: int, patient_phone: str = "") -> str:
     import json
     system = (
         SYSTEM_PROMPT
         .replace("{conversation_id}", str(conversation_id))
         .replace("{patient_phone}", patient_phone or "desconocido")
+        .replace("{today}", _today_str())
     )
     messages = [{"role": "system", "content": system}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history]
