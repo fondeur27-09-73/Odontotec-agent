@@ -4,19 +4,20 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
-from integrations import chatwoot, db
+from integrations import chatwoot, db, airtable
 from utils.audio import transcribe_audio as _transcribe
 
 db.init_db()
 
 
-# MODO PRUEBA: Cal.com retirado. Carla NO reserva ni reagenda en ningún sistema
-# externo hasta que Dentidesk esté conectado. Solo lee/guarda paciente local,
-# transcribe audio y escala.
+# DEMO: Cal.com retirado. Las citas se registran temporalmente en Airtable
+# (register_appointment) mientras Dentidesk no esté conectado. Se retira al
+# integrar Dentidesk.
 def handle_tool(tool_name: str, tool_input: dict) -> str:
     handlers = {
         "get_patient": _get_patient,
         "save_patient": _save_patient,
+        "register_appointment": _register_appointment,
         "escalate_to_human": _escalate_to_human,
         "transcribe_audio": _transcribe_audio,
     }
@@ -39,6 +40,28 @@ def _get_patient(phone: str) -> dict:
 def _save_patient(phone: str, name: str, cedula: str = "") -> dict:
     saved = db.save_patient(phone, name=name, cedula=cedula)
     return {"success": True, "patient": {"phone": phone, **saved}}
+
+
+def _register_appointment(
+    patient_name: str,
+    patient_phone: str,
+    specialty: str,
+    day: str,
+    time: str,
+    cedula: str = "",
+    estado: str = "Confirmada",
+) -> dict:
+    label = _SPECIALTY_LABELS.get(specialty, specialty)
+    res = airtable.register_appointment(
+        patient_name=patient_name,
+        patient_phone=patient_phone,
+        specialty=label,
+        day=day,
+        time=time,
+        cedula=cedula,
+        estado=estado,
+    )
+    return {"success": True, **res}
 
 
 def _escalate_to_human(reason: str, conversation_id: int) -> dict:

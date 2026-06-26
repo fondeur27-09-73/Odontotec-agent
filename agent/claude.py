@@ -46,6 +46,25 @@ OPENAI_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "register_appointment",
+            "description": "Registra la cita confirmada del paciente. Usar UNA SOLA VEZ en PASO 6, después de que el paciente confirme sus datos en PASO 5.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_name": {"type": "string", "description": "Nombre completo del paciente"},
+                    "patient_phone": {"type": "string", "description": "Teléfono del paciente"},
+                    "cedula": {"type": "string", "description": "Cédula del paciente"},
+                    "specialty": {"type": "string", "description": "general|ortodoncia|endodoncia|cirugia|protesis|odontopediatria"},
+                    "day": {"type": "string", "description": "Día de la cita en texto, ej: sábado 27 de junio"},
+                    "time": {"type": "string", "description": "Hora de la cita, ej: 10:00 AM"}
+                },
+                "required": ["patient_name", "patient_phone", "specialty", "day", "time"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "transcribe_audio",
             "description": "Transcribe nota de voz a texto. Usar cuando el paciente envíe audio.",
             "parameters": {
