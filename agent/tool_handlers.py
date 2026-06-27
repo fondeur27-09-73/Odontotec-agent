@@ -5,7 +5,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
-from integrations import chatwoot, db, airtable
+from integrations import chatwoot, db, dentidesk, dentidesk_playwright
 from utils.audio import transcribe_audio as _transcribe
 
 db.init_db()
@@ -63,14 +63,17 @@ def _within_clinic_hours(fecha_iso: str, time_str: str) -> tuple[bool, str]:
     return True, ""
 
 
-# DEMO: Cal.com retirado. Las citas se registran temporalmente en Airtable
-# (register_appointment) mientras Dentidesk no esté conectado. Se retira al
-# integrar Dentidesk.
+# Agenda real = Dentidesk. Lectura por API (buscar/confirmar). Crear y mover citas se hace por
+# Playwright sobre la UI web (la API no lo permite). Toda ESCRITURA está bajo el candado
+# DENTIDESK_ALLOW_WRITES y se ejercita solo en el campo de simulación autorizado.
 def handle_tool(tool_name: str, tool_input: dict) -> str:
     handlers = {
         "get_patient": _get_patient,
         "save_patient": _save_patient,
-        "register_appointment": _register_appointment,
+        "buscar_cita_dentidesk": _buscar_cita_dentidesk,
+        "agendar_cita_dentidesk": _agendar_cita_dentidesk,
+        "reagendar_cita_dentidesk": _reagendar_cita_dentidesk,
+        "confirmar_cita_dentidesk": _confirmar_cita_dentidesk,
         "escalate_to_human": _escalate_to_human,
         "transcribe_audio": _transcribe_audio,
     }
@@ -95,36 +98,91 @@ def _save_patient(phone: str, name: str, cedula: str = "") -> dict:
     return {"success": True, "patient": {"phone": phone, **saved}}
 
 
-def _register_appointment(
+def _agendar_cita_dentidesk(
     patient_name: str,
     patient_phone: str,
     specialty: str,
     day: str,
     time: str,
     cedula: str = "",
-    estado: str = "Confirmada",
     procedimiento: str = "",
     fecha_iso: str = "",
-    is_reschedule: bool = False,
+    sucursal: str = "arroyo_hondo",
 ) -> dict:
+    """ESCRITURA (UI Playwright): crea una cita NUEVA en Dentidesk. Backstop de horario antes de
+    tocar nada. Bajo candado DENTIDESK_ALLOW_WRITES (no opera fuera del campo de simulación)."""
     ok, msg = _within_clinic_hours(fecha_iso, time)
     if not ok:
-        # Backstop: no se registra fuera de horario. El agente debe pedir hora válida.
         return {"success": False, "error": "fuera_de_horario", "message": msg}
-    label = _SPECIALTY_LABELS.get(specialty, specialty)
-    res = airtable.register_appointment(
-        patient_name=patient_name,
-        patient_phone=patient_phone,
-        specialty=label,
-        day=day,
-        time=time,
-        cedula=cedula,
-        estado=estado,
-        procedimiento=procedimiento,
-        fecha_iso=fecha_iso,
-        is_reschedule=is_reschedule,
+    loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
+    res = dentidesk_playwright.create_appointment(
+        cedula=cedula, patient_name=patient_name, phone=patient_phone,
+        specialty=specialty, fecha_iso=fecha_iso, time=time,
+        procedimiento=procedimiento, sucursal=loc,
     )
-    return {"success": True, **res}
+    return {"success": True, **(res if isinstance(res, dict) else {"result": res})}
+
+
+def _reagendar_cita_dentidesk(
+    id_agenda: str,
+    fecha_iso: str,
+    time: str,
+    sucursal: str = "arroyo_hondo",
+) -> dict:
+    """ESCRITURA (UI Playwright): mueve una cita existente a otra fecha/hora (la API no puede).
+    Backstop de horario. Bajo candado DENTIDESK_ALLOW_WRITES."""
+    ok, msg = _within_clinic_hours(fecha_iso, time)
+    if not ok:
+        return {"success": False, "error": "fuera_de_horario", "message": msg}
+    loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
+    res = dentidesk_playwright.move_appointment(
+        id_agenda=id_agenda, nueva_fecha_iso=fecha_iso, nueva_hora=time, sucursal=loc,
+    )
+    return {"success": True, **(res if isinstance(res, dict) else {"result": res})}
+
+
+_LOCATION_ALIAS = {
+    "arroyo_hondo": "214", "arroyo hondo": "214", "214": "214",
+    "naco": "215", "215": "215",
+    "haina": "216", "216": "216",
+}
+
+
+def _buscar_cita_dentidesk(
+    fecha_iso: str,
+    cedula: str = "",
+    telefono: str = "",
+    sucursal: str = "arroyo_hondo",
+) -> dict:
+    """LECTURA: busca la cita del paciente en la agenda real de Dentidesk para un día.
+    Empareja por cédula o por teléfono. Devuelve la cita (datos del propio paciente) o no encontrada."""
+    loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
+    cita = None
+    if cedula:
+        cita = dentidesk.find_by_cedula(cedula, fecha_iso, loc)
+    if cita is None and telefono:
+        cita = dentidesk.find_by_phone(telefono, fecha_iso, loc)
+    if not cita:
+        return {"found": False, "fecha": fecha_iso}
+    return {
+        "found": True,
+        "IdAgenda": cita.get("IdAgenda"),
+        "fecha": cita.get("Date"),
+        "hora": cita.get("time"),
+        "procedimiento": cita.get("Reason"),
+        "doctor": cita.get("ProfessionalName"),
+        "especialidad": (cita.get("ProfessionalSpeciality") or [None])[0],
+        "estado": cita.get("Status"),
+        "sucursal": cita.get("LocationName"),
+    }
+
+
+def _confirmar_cita_dentidesk(id_agenda: str, sucursal: str = "arroyo_hondo") -> dict:
+    """ESCRITURA: marca una cita existente como Confirmada en Dentidesk. Protegida por el candado
+    DENTIDESK_ALLOW_WRITES del módulo (sin ese env lanza error). No se ejecuta en desarrollo."""
+    loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
+    res = dentidesk.confirm_appointment(id_agenda, loc)
+    return {"success": True, **(res if isinstance(res, dict) else {"result": res})}
 
 
 def _escalate_to_human(reason: str, conversation_id: int) -> dict:

@@ -47,8 +47,8 @@ OPENAI_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "register_appointment",
-            "description": "Registra la cita confirmada del paciente. Usar UNA SOLA VEZ en PASO 6, después de que el paciente confirme sus datos en PASO 5.",
+            "name": "agendar_cita_dentidesk",
+            "description": "Crea una cita NUEVA en Dentidesk. Usar UNA SOLA VEZ en PASO 6, después de que el paciente confirme sus datos en PASO 5.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -60,9 +60,58 @@ OPENAI_TOOLS = [
                     "day": {"type": "string", "description": "Día de la cita en texto, ej: sábado 27 de junio"},
                     "time": {"type": "string", "description": "Hora de la cita, ej: 10:00 AM"},
                     "fecha_iso": {"type": "string", "description": "Fecha de la cita en formato ISO YYYY-MM-DD, calculada a partir de la fecha de hoy indicada en el prompt. Ej: 2026-06-29"},
-                    "is_reschedule": {"type": "boolean", "description": "True SOLO si es una reagenda (el paciente ya tenía una cita y la está moviendo). Borra la cita anterior del paciente para no duplicar. False para cita nueva."}
+                    "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina (default arroyo_hondo)"}
                 },
                 "required": ["patient_name", "patient_phone", "specialty", "procedimiento", "day", "time", "fecha_iso"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reagendar_cita_dentidesk",
+            "description": "Mueve (reagenda) una cita EXISTENTE de Dentidesk a otra fecha/hora. Requiere el IdAgenda obtenido con buscar_cita_dentidesk. Usar UNA SOLA VEZ tras confirmar los nuevos datos.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id_agenda": {"type": "string", "description": "IdAgenda de la cita a mover (de buscar_cita_dentidesk)"},
+                    "fecha_iso": {"type": "string", "description": "Nueva fecha en formato YYYY-MM-DD"},
+                    "time": {"type": "string", "description": "Nueva hora, ej: 10:00 AM"},
+                    "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina"}
+                },
+                "required": ["id_agenda", "fecha_iso", "time"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_cita_dentidesk",
+            "description": "LECTURA de la agenda real de Dentidesk. Busca si el paciente ya tiene una cita en un día concreto, por cédula o teléfono. Úsalo para saber si es paciente recurrente o ver los datos de su cita.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fecha_iso": {"type": "string", "description": "Fecha a consultar en formato YYYY-MM-DD"},
+                    "cedula": {"type": "string", "description": "Cédula del paciente (opcional)"},
+                    "telefono": {"type": "string", "description": "Teléfono del paciente (opcional)"},
+                    "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina (default arroyo_hondo)"}
+                },
+                "required": ["fecha_iso"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confirmar_cita_dentidesk",
+            "description": "ESCRITURA: marca una cita existente de Dentidesk como Confirmada. Requiere el IdAgenda obtenido con buscar_cita_dentidesk. Solo en producción autorizada.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id_agenda": {"type": "string", "description": "IdAgenda de la cita a confirmar"},
+                    "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina"}
+                },
+                "required": ["id_agenda"]
             }
         }
     },
