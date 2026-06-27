@@ -59,7 +59,8 @@ OPENAI_TOOLS = [
                     "procedimiento": {"type": "string", "description": "Tratamiento concreto que pidió el paciente, en palabras: ej 'Limpieza dental', 'Extracción de muela', 'Tratamiento de canal', 'Brackets'"},
                     "day": {"type": "string", "description": "Día de la cita en texto, ej: sábado 27 de junio"},
                     "time": {"type": "string", "description": "Hora de la cita, ej: 10:00 AM"},
-                    "fecha_iso": {"type": "string", "description": "Fecha de la cita en formato ISO YYYY-MM-DD, calculada a partir de la fecha de hoy indicada en el prompt. Ej: 2026-06-29"}
+                    "fecha_iso": {"type": "string", "description": "Fecha de la cita en formato ISO YYYY-MM-DD, calculada a partir de la fecha de hoy indicada en el prompt. Ej: 2026-06-29"},
+                    "is_reschedule": {"type": "boolean", "description": "True SOLO si es una reagenda (el paciente ya tenía una cita y la está moviendo). Borra la cita anterior del paciente para no duplicar. False para cita nueva."}
                 },
                 "required": ["patient_name", "patient_phone", "specialty", "procedimiento", "day", "time", "fecha_iso"]
             }
