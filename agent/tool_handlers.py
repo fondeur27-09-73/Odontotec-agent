@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -8,6 +9,58 @@ from integrations import chatwoot, db, airtable
 from utils.audio import transcribe_audio as _transcribe
 
 db.init_db()
+
+
+# Horario de la clínica (minutos desde medianoche). Backstop de código: aunque el
+# modelo intente, NUNCA se registra una cita fuera de horario.
+#   L-V (0-4): 8:30am - 5:30pm | Sáb (5): 8:00am - 12:00pm | Dom (6): cerrado
+_HOURS = {0: (510, 1050), 1: (510, 1050), 2: (510, 1050), 3: (510, 1050),
+          4: (510, 1050), 5: (480, 720)}
+
+
+def _parse_minutes(time_str: str) -> int | None:
+    """Convierte '1:30 PM', '8:30 a.m.', '9 am', '14:00' a minutos desde medianoche."""
+    if not time_str:
+        return None
+    s = time_str.strip().lower().replace(".", "").replace(" ", "")
+    m = re.match(r"^(\d{1,2})(?::(\d{2}))?(am|pm|a|p)?m?$", s)
+    if not m:
+        m = re.match(r"^(\d{1,2})(?::(\d{2}))?(am|pm)?$", s)
+    if not m:
+        return None
+    hh = int(m.group(1))
+    mm = int(m.group(2) or 0)
+    ap = m.group(3)
+    if ap in ("pm", "p") and hh != 12:
+        hh += 12
+    if ap in ("am", "a") and hh == 12:
+        hh = 0
+    if hh > 23 or mm > 59:
+        return None
+    return hh * 60 + mm
+
+
+def _within_clinic_hours(fecha_iso: str, time_str: str) -> tuple[bool, str]:
+    """Valida fecha+hora contra el horario. Si no se puede parsear, permite (lenient)
+    para no bloquear casos legítimos; solo bloquea lo que es claramente fuera de horario."""
+    if not fecha_iso:
+        return True, ""
+    try:
+        wd = datetime.strptime(fecha_iso[:10], "%Y-%m-%d").weekday()
+    except Exception:
+        return True, ""
+    if wd == 6:
+        return False, "Los domingos la clínica está cerrada."
+    rng = _HOURS.get(wd)
+    mins = _parse_minutes(time_str)
+    if rng is None or mins is None:
+        return True, ""
+    lo, hi = rng
+    if mins < lo or mins > hi:
+        if wd == 5:
+            return False, "Los sábados atendemos de 8:00 a.m. a 12:00 p.m."
+        return False, "El horario es de lunes a viernes de 8:30 a.m. a 5:30 p.m."
+    return True, ""
 
 
 # DEMO: Cal.com retirado. Las citas se registran temporalmente en Airtable
@@ -54,6 +107,10 @@ def _register_appointment(
     fecha_iso: str = "",
     is_reschedule: bool = False,
 ) -> dict:
+    ok, msg = _within_clinic_hours(fecha_iso, time)
+    if not ok:
+        # Backstop: no se registra fuera de horario. El agente debe pedir hora válida.
+        return {"success": False, "error": "fuera_de_horario", "message": msg}
     label = _SPECIALTY_LABELS.get(specialty, specialty)
     res = airtable.register_appointment(
         patient_name=patient_name,
