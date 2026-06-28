@@ -88,6 +88,39 @@ def _fill_new_patient_form(page, nombre: str, apellido: str, rut: str, fonocel: 
 
 AGENDA_URL = "https://app.dentidesk.com/home.php"
 
+_MESES_ES = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10, "noviembre": 11,
+    "diciembre": 12,
+}
+
+
+def _goto_calendar_date(page, anio: int, mes: int, dia: int) -> None:
+    """Navega el calendario principal (#calendar, FullCalendar) a una fecha arbitraria usando
+    el minicalendario (#datepicker, jQuery UI Datepicker) — VERIFICADO en vivo 2026-06-28.
+
+    `$('#calendar').fullCalendar('gotoDate', ...)` (intento anterior) está ROTO: manda la vista
+    a 1 de Enero de 1970 (la firma asumida no es la real de esta versión de FullCalendar). El
+    datepicker SÍ navega el calendario principal al hacer click en un día (confirmado: el header
+    de #calendar pasa a mostrar la fecha clickeada)."""
+    for _ in range(60):  # tope de seguridad, nunca deberian hacer falta mas de ~12 meses
+        mes_actual = page.eval_on_selector(".ui-datepicker-month", "el => el.textContent.trim().toLowerCase()")
+        anio_actual = int(page.eval_on_selector(".ui-datepicker-year", "el => el.textContent.trim()"))
+        mes_actual_num = _MESES_ES[mes_actual]
+        if (anio_actual, mes_actual_num) == (anio, mes):
+            break
+        ir_adelante = (anio_actual, mes_actual_num) < (anio, mes)
+        selector = ".ui-datepicker-next" if ir_adelante else ".ui-datepicker-prev"
+        page.click(selector)
+        page.wait_for_timeout(150)
+    else:
+        raise RuntimeError(f"No se pudo navegar el minicalendario a {anio}-{mes:02d}")
+    dia_str = str(dia)
+    page.locator("#datepicker a", has_text=dia_str).filter(
+        has_text=__import__("re").compile(rf"^{dia_str}$")
+    ).first.click()
+    page.wait_for_load_state("networkidle")
+
 
 def _set_patient_name_fields(page, nombre_completo: str) -> None:
     """Llena el nombre del paciente en AMBOS inputs que usa el formulario de cita: el visible
@@ -159,6 +192,7 @@ def create_appointment(
             with page.expect_response(lambda r: "ajaxAgenda.php" in r.url, timeout=15000) as resp_info:
                 page.click("#btn_guardar_cita")
             data = resp_info.value.json()
+            page.goto(AGENDA_URL, wait_until="networkidle")  # vuelve a Agenda/Hoy al terminar
             if not data.get("id_agenda"):
                 return {"success": False, "error": "guardar_cita_fallo", "raw": data}
             return {"success": True, "IdAgenda": data.get("id_agenda"),
@@ -177,11 +211,10 @@ def move_appointment(
     fecha_actual_iso/patient_name (de buscar_cita_dentidesk) son necesarios porque el IdAgenda NO
     se muestra en pantalla — hay que navegar al día correcto y clickear la tarjeta por nombre.
 
-    NO VERIFICADO — `fullCalendar('gotoDate', ...)` se infiere de que guardar_cita() llama
-    `$('#calendar').fullCalendar('refetchEvents')` en su callback de éxito (confirma que el widget
-    es jQuery FullCalendar v1/2, cuya API estándar para saltar a una fecha es 'gotoDate'), pero
-    nunca se ejecutó en vivo. El click por texto del paciente SÍ está verificado (2 veces, en
-    Semana y Día, sobre citas reales)."""
+    Navegación de fecha vía minicalendario (_goto_calendar_date) — VERIFICADA en vivo 2026-06-28
+    (el intento anterior con fullCalendar('gotoDate', ...) estaba ROTO, mandaba a 1 Enero 1970).
+    El click por texto del paciente SÍ está verificado (2 veces, en Semana y Día, sobre citas
+    reales)."""
     _require_writes_enabled()
     from playwright.sync_api import sync_playwright  # import perezoso
     anio_act, mes_act, dia_act = fecha_actual_iso[:10].split("-")
@@ -193,11 +226,7 @@ def move_appointment(
         try:
             _login(page)
             page.goto(AGENDA_URL, wait_until="networkidle")
-            page.evaluate(
-                "([a, m, d]) => $('#calendar').fullCalendar('gotoDate', a, m - 1, d)",
-                [int(anio_act), int(mes_act), int(dia_act)],
-            )
-            page.wait_for_load_state("networkidle")
+            _goto_calendar_date(page, int(anio_act), int(mes_act), int(dia_act))
             page.locator(f"text={patient_name}").first.click(timeout=8000)
             page.wait_for_selector("#btn_guardar_cita", timeout=5000)
             # Salvaguarda: confirmar que el modal abierto es REALMENTE la cita pedida (nombre
@@ -205,6 +234,7 @@ def move_appointment(
             abierto = page.input_value("#id_agenda")
             if abierto and str(abierto) != str(id_agenda):
                 page.click("text=Cerrar")
+                page.goto(AGENDA_URL, wait_until="networkidle")  # vuelve a Agenda/Hoy al terminar
                 return {"success": False, "error": "id_agenda_no_coincide",
                         "esperado": id_agenda, "abierto": abierto}
             page.select_option("#diacita", dia)
@@ -215,6 +245,7 @@ def move_appointment(
             with page.expect_response(lambda r: "ajaxAgenda.php" in r.url, timeout=15000) as resp_info:
                 page.click("#btn_guardar_cita")
             data = resp_info.value.json()
+            page.goto(AGENDA_URL, wait_until="networkidle")  # vuelve a Agenda/Hoy al terminar
             if not data.get("id_agenda"):
                 return {"success": False, "error": "guardar_cita_fallo", "raw": data}
             return {"success": True, "IdAgenda": data.get("id_agenda")}
