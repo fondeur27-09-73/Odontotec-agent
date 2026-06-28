@@ -125,18 +125,23 @@ def _agendar_cita_dentidesk(
 
 def _reagendar_cita_dentidesk(
     id_agenda: str,
+    fecha_actual_iso: str,
+    patient_name: str,
     fecha_iso: str,
     time: str,
     sucursal: str = "arroyo_hondo",
 ) -> dict:
     """ESCRITURA (UI Playwright): mueve una cita existente a otra fecha/hora (la API no puede).
-    Backstop de horario. Bajo candado DENTIDESK_ALLOW_WRITES."""
+    Backstop de horario. Bajo candado DENTIDESK_ALLOW_WRITES. fecha_actual_iso/patient_name son
+    necesarios para que Playwright ubique la tarjeta de la cita en la grilla de la agenda (vienen
+    de una llamada previa a buscar_cita_dentidesk)."""
     ok, msg = _within_clinic_hours(fecha_iso, time)
     if not ok:
         return {"success": False, "error": "fuera_de_horario", "message": msg}
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
     res = dentidesk_playwright.move_appointment(
-        id_agenda=id_agenda, nueva_fecha_iso=fecha_iso, nueva_hora=time, sucursal=loc,
+        id_agenda=id_agenda, fecha_actual_iso=fecha_actual_iso, patient_name=patient_name,
+        nueva_fecha_iso=fecha_iso, nueva_hora=time, sucursal=loc,
     )
     return {"success": True, **(res if isinstance(res, dict) else {"result": res})}
 
@@ -167,6 +172,7 @@ def _buscar_cita_dentidesk(
     return {
         "found": True,
         "IdAgenda": cita.get("IdAgenda"),
+        "paciente": cita.get("PatientName"),
         "fecha": cita.get("Date"),
         "hora": cita.get("time"),
         "procedimiento": cita.get("Reason"),

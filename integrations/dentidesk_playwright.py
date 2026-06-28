@@ -2,8 +2,9 @@
 Dentidesk vía Playwright — lo que la API NO cubre (crear y mover citas).
 
 La API de Dentidesk solo LEE agenda y CAMBIA status (ver integrations/dentidesk.py). No hay endpoint
-para crear cliente, crear cita nueva, ni mover fecha/hora. Eso se automatiza sobre la UI web
-(https://app.dentidesk.com) con Playwright.
+público para crear cliente, crear cita nueva, ni mover fecha/hora (existe un `agenda/createAgenda.php`
+oculto, no documentado y no probado — ver memoria del proyecto). Por eso esto se automatiza sobre la
+UI web (https://app.dentidesk.com) con Playwright.
 
 IMPORTANTE — IMPORT PEREZOSO:
   Este módulo se importa desde agent/tool_handlers.py, que corre en el contenedor Docker de
@@ -15,12 +16,22 @@ IMPORTANTE — IMPORT PEREZOSO:
 CANDADO: toda acción de ESCRITURA exige DENTIDESK_ALLOW_WRITES=1. Sin ese env, se detiene ANTES de
 abrir el navegador. Solo en el campo de simulación autorizado se activa.
 
-SELECTORES PENDIENTES:
-  Los page.fill/page.click reales se capturan el día de la simulación con:
-      & ".venv\\Scripts\\Activate.ps1"
-      python scripts/dentidesk_codegen.py        # abre codegen sobre la UI logueada
-  Recorrer "nueva cita" y "reagendar" SIN pulsar guardar, copiar los selectores que imprime codegen
-  y pegarlos en los bloques marcados TODO(codegen) más abajo.
+SELECTORES — capturados 2026-06-28 inspeccionando la app real (login, pacientes.php → ficha.php,
+agenda → editar cita, agenda → nueva cita) más el código fuente JS de home.php (funciones globales
+open_modal_cita/clean_modal_cita/guardar_cita/load_data_cita). Documentado en memoria del proyecto
+(dentidesk-api-contract). NUNCA se ha pulsado Guardar en producción — todo lo de abajo está
+verificado hasta "abrir formulario con los datos correctos", NO verificado en el guardado real.
+
+NOTA — campo nombre duplicado: el input VISIBLE del formulario de cita es #nombre_norden, pero
+guardar_cita() (JS) lee el valor de un input OCULTO #nombre. Llenar solo #nombre_norden vía
+page.fill NO sincroniza #nombre (probado: el evento 'input' sintético no dispara el binding real
+de la UI) → hay que escribir #nombre explícitamente también (ver _set_patient_name_fields).
+
+NOTA — bloqueos por doctor ("No agendar Dra. X" naranja en el calendario): son notas reales en la
+BD (mismo sistema de modal, formulario distinto: título/observación/sucursal/profesional/fecha/
+hora/duración), no un horario fijo configurable. Por ahora no hay forma de leerlos vía API; el
+server SÍ los valida al guardar una cita (devuelve cupo_disp=0 → "Horario no disponible para el
+dentista seleccionado"). Pendiente: función de solo-lectura que recorra la agenda y los liste.
 """
 import os
 
@@ -40,15 +51,68 @@ def _require_writes_enabled():
 
 
 def _login(page):
-    """Inicia sesión en la UI web. SELECTORES PENDIENTES (capturar con codegen)."""
+    """Inicia sesión en la UI web. Selectores capturados 2026-06-27."""
     if not WEB_USER or not WEB_PASS:
         raise RuntimeError("Faltan DENTIDESK_WEB_USER / DENTIDESK_WEB_PASS en el entorno")
-    page.goto(LOGIN_URL)
-    # TODO(codegen): page.fill("<selector usuario>", WEB_USER)
-    # TODO(codegen): page.fill("<selector clave>", WEB_PASS)
-    # TODO(codegen): page.click("<selector botón entrar>")
-    # TODO(codegen): page.wait_for_url("**/agenda**")  # o el landing real tras login
-    raise NotImplementedError("Selectores de login pendientes de capturar con codegen")
+    page.goto(LOGIN_URL, wait_until="networkidle")
+    page.fill("#user-login", WEB_USER)
+    page.fill("#pass-login", WEB_PASS)
+    page.click("#btn_login")
+    page.wait_for_load_state("networkidle")
+
+
+PACIENTES_URL = "https://app.dentidesk.com/pacientes.php"
+
+
+def _fill_new_patient_form(page, nombre: str, apellido: str, rut: str, fonocel: str,
+                            email: str = "", doctor_label: str = "") -> None:
+    """Llena el formulario 'Nuevo Paciente' (ficha.php). Selectores capturados 2026-06-28
+    desde pacientes.php → #btn_paciente → ficha.php. NO pulsa Guardar (#btn_guardar_datos):
+    eso queda a cargo del caller, bajo candado y solo el día de simulación.
+
+    OJO: doctor_paciente / id_convenio / idioma son selects nativos detrás de un botón con
+    estilo custom (chosen/select2-like) — page.select_option debería disparar el 'change' que
+    sincroniza el botón visible, pero NO VERIFICADO (no se ha guardado nunca un registro real)."""
+    page.goto(PACIENTES_URL, wait_until="networkidle")
+    page.click("#btn_paciente")
+    page.wait_for_load_state("networkidle")
+    page.fill("#nombre", nombre)
+    page.fill("#apellido", apellido)
+    page.fill("#rut", rut)
+    page.fill("#fonocel", fonocel)
+    if email:
+        page.fill("#email", email)
+    if doctor_label:
+        page.select_option("#doctor_paciente", label=doctor_label)  # NO VERIFICADO
+
+
+AGENDA_URL = "https://app.dentidesk.com/home.php"
+
+
+def _set_patient_name_fields(page, nombre_completo: str) -> None:
+    """Llena el nombre del paciente en AMBOS inputs que usa el formulario de cita: el visible
+    #nombre_norden y el oculto #nombre (este último es el que guardar_cita() realmente lee)."""
+    page.fill("#nombre_norden", nombre_completo)
+    page.evaluate("(v) => { document.getElementById('nombre').value = v; }", nombre_completo)
+
+
+def _fill_cita_form(page, *, rut: str, fonocel: str, email: str, sucursal: str,
+                     doctor_label: str, motivo_label: str, duracion_min: int) -> None:
+    page.fill("#rut", rut)
+    if email:
+        page.fill("#email", email)
+    if fonocel:
+        page.fill("#fono", fonocel)
+    page.select_option("#sucursal_cita", value=str(sucursal))
+    if doctor_label:
+        page.select_option("#dentista_cita", label=doctor_label)  # NO VERIFICADO en guardado real
+    if motivo_label:
+        try:
+            page.select_option("#motivo", label=motivo_label)
+        except Exception:
+            pass  # motivo no es obligatorio para guardar_cita() salvo plan_radiologico
+    if duracion_min:
+        page.fill("#largo", str(duracion_min))
 
 
 def create_appointment(
@@ -57,35 +121,102 @@ def create_appointment(
     procedimiento: str = "", sucursal: str = "214",
 ) -> dict:
     """ESCRITURA (UI): crea una cita nueva en Dentidesk. Bajo candado DENTIDESK_ALLOW_WRITES.
-    No operativo hasta capturar selectores (TODO(codegen))."""
+
+    OJO — selección de doctor: `specialty` se usa como label contra el <select id="dentista_cita">,
+    que lista NOMBRES de doctor, no especialidades. Esto solo funciona si el caller ya resolvió
+    `specialty` a un nombre real de doctor (ver Profesionales en agenda). Mapear especialidad→doctor
+    disponible es una decisión de negocio pendiente, fuera del alcance de este mapeo de selectores.
+    """
     _require_writes_enabled()
     from playwright.sync_api import sync_playwright  # import perezoso (ver cabecera)
+    anio, mes, dia = fecha_iso[:10].split("-")
+    hh, mm = (time.split(":") + ["00"])[:2]
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
         page = browser.new_page()
         try:
             _login(page)
-            # TODO(codegen): abrir "nueva cita", rellenar cédula/nombre/teléfono/especialidad/
-            #   fecha/hora/procedimiento y GUARDAR. Devolver el IdAgenda creado si la UI lo expone.
-            raise NotImplementedError("create_appointment: selectores pendientes (codegen)")
+            page.goto(AGENDA_URL, wait_until="networkidle")
+            inicio = f"{anio}-{mes}-{dia} {hh}:{mm}"
+            page.evaluate(
+                "([ini]) => window.open_modal_cita(moment(ini), moment(ini).add(30, 'minutes'))",
+                [inicio],
+            )
+            page.wait_for_selector("#modal_cita.show, #modal_cita.in, #btn_guardar_cita",
+                                   timeout=5000)
+            _set_patient_name_fields(page, patient_name)
+            _fill_cita_form(
+                page, rut=cedula or "1-9", fonocel=phone, email="", sucursal=sucursal,
+                doctor_label=specialty, motivo_label=procedimiento, duracion_min=30,
+            )
+            # Asegura fecha/hora exactas (open_modal_cita ya las precarga, esto es redundante a
+            # propósito por si el caller pide algo distinto del slot inicial).
+            page.select_option("#diacita", dia)
+            page.select_option("#mescita", mes)
+            page.select_option("#aniocita", anio)
+            page.select_option("#horac", hh.zfill(2))
+            page.select_option("#minutos", mm.zfill(2))
+            with page.expect_response(lambda r: "ajaxAgenda.php" in r.url, timeout=15000) as resp_info:
+                page.click("#btn_guardar_cita")
+            data = resp_info.value.json()
+            if not data.get("id_agenda"):
+                return {"success": False, "error": "guardar_cita_fallo", "raw": data}
+            return {"success": True, "IdAgenda": data.get("id_agenda"),
+                    "IdPaciente": data.get("id_paciente")}
         finally:
             browser.close()
 
 
 def move_appointment(
-    id_agenda: str, nueva_fecha_iso: str, nueva_hora: str, sucursal: str = "214",
+    id_agenda: str, fecha_actual_iso: str, patient_name: str,
+    nueva_fecha_iso: str, nueva_hora: str, sucursal: str = "214",
 ) -> dict:
     """ESCRITURA (UI): mueve (reagenda) una cita existente a otra fecha/hora — la API no puede.
-    Bajo candado DENTIDESK_ALLOW_WRITES. No operativo hasta capturar selectores."""
+    Bajo candado DENTIDESK_ALLOW_WRITES.
+
+    fecha_actual_iso/patient_name (de buscar_cita_dentidesk) son necesarios porque el IdAgenda NO
+    se muestra en pantalla — hay que navegar al día correcto y clickear la tarjeta por nombre.
+
+    NO VERIFICADO — `fullCalendar('gotoDate', ...)` se infiere de que guardar_cita() llama
+    `$('#calendar').fullCalendar('refetchEvents')` en su callback de éxito (confirma que el widget
+    es jQuery FullCalendar v1/2, cuya API estándar para saltar a una fecha es 'gotoDate'), pero
+    nunca se ejecutó en vivo. El click por texto del paciente SÍ está verificado (2 veces, en
+    Semana y Día, sobre citas reales)."""
     _require_writes_enabled()
     from playwright.sync_api import sync_playwright  # import perezoso
+    anio_act, mes_act, dia_act = fecha_actual_iso[:10].split("-")
+    anio, mes, dia = nueva_fecha_iso[:10].split("-")
+    hh, mm = (nueva_hora.split(":") + ["00"])[:2]
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
         page = browser.new_page()
         try:
             _login(page)
-            # TODO(codegen): buscar la cita (por id_agenda/paciente), abrir editar, cambiar
-            #   fecha/hora y GUARDAR.
-            raise NotImplementedError("move_appointment: selectores pendientes (codegen)")
+            page.goto(AGENDA_URL, wait_until="networkidle")
+            page.evaluate(
+                "([a, m, d]) => $('#calendar').fullCalendar('gotoDate', a, m - 1, d)",
+                [int(anio_act), int(mes_act), int(dia_act)],
+            )
+            page.wait_for_load_state("networkidle")
+            page.locator(f"text={patient_name}").first.click(timeout=8000)
+            page.wait_for_selector("#btn_guardar_cita", timeout=5000)
+            # Salvaguarda: confirmar que el modal abierto es REALMENTE la cita pedida (nombre
+            # repetido en otra fila/columna podría abrir una cita distinta con el mismo paciente).
+            abierto = page.input_value("#id_agenda")
+            if abierto and str(abierto) != str(id_agenda):
+                page.click("text=Cerrar")
+                return {"success": False, "error": "id_agenda_no_coincide",
+                        "esperado": id_agenda, "abierto": abierto}
+            page.select_option("#diacita", dia)
+            page.select_option("#mescita", mes)
+            page.select_option("#aniocita", anio)
+            page.select_option("#horac", hh.zfill(2))
+            page.select_option("#minutos", mm.zfill(2))
+            with page.expect_response(lambda r: "ajaxAgenda.php" in r.url, timeout=15000) as resp_info:
+                page.click("#btn_guardar_cita")
+            data = resp_info.value.json()
+            if not data.get("id_agenda"):
+                return {"success": False, "error": "guardar_cita_fallo", "raw": data}
+            return {"success": True, "IdAgenda": data.get("id_agenda")}
         finally:
             browser.close()

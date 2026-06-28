@@ -147,6 +147,32 @@ def probe_day(env, day):
         print(f"(no JSON) {body[:300]}  | {e}")
 
 
+def probe_exists(env, candidates):
+    """SOLO existencia (sin escribir): POST JSON con Token valido pero campos minimos/vacios.
+    404 = no existe. 401/400 con mensaje tipo 'datos minimos' = SI existe (igual que se descubrio
+    createAgenda.php). Nunca manda datos completos de escritura real."""
+    base = env["DENTIDESK_BASE"].rstrip("/")
+    loc = env.get("DENTIDESK_LOCATION", "214")
+    tok = login(env)
+    if not tok:
+        return
+    for path in candidates:
+        url = f"{base}/{path}"
+        status, body, _ = call("POST", url, {"Token": tok, "IdLocation": loc}, mode="json")
+        tag = "?" if status == 404 else ("EXISTE" if status in (400, 401, 422) else "200?")
+        print(f"[{tag}] {path} -> {status} | {body[:200].replace(chr(10), ' ')}")
+
+
+# Candidatos de lectura (vocabulario UI descubierto 2026-06-28: "nota", bloqueos por doctor).
+NOTAS_CANDIDATES = [
+    "agenda/getNotas.php", "agenda/getNota.php", "agenda/notas.php",
+    "agenda/getBloqueos.php", "agenda/getBloqueo.php", "agenda/bloqueos.php",
+    "agenda/insertarNota.php", "agenda/getDisponibilidad.php",
+    "agenda/getProfesionales.php", "agenda/getHorarios.php", "agenda/getHorarioProfesional.php",
+    "pacientes/getPaciente.php", "pacientes/buscarPaciente.php", "pacientes/getPacientes.php",
+]
+
+
 if __name__ == "__main__":
     env = load_env()
     step = sys.argv[1] if len(sys.argv) > 1 else "auth"
@@ -155,5 +181,7 @@ if __name__ == "__main__":
     elif step == "day":
         d = sys.argv[2] if len(sys.argv) > 2 else date.today().isoformat()
         probe_day(env, d)
+    elif step == "notas":
+        probe_exists(env, NOTAS_CANDIDATES)
     else:
-        print("Uso: python scripts/dentidesk_probe.py [auth|day] [YYYY-MM-DD]")
+        print("Uso: python scripts/dentidesk_probe.py [auth|day|notas] [YYYY-MM-DD]")
