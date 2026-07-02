@@ -137,15 +137,62 @@ def _fill_cita_form(page, *, rut: str, fonocel: str, email: str, sucursal: str,
     if fonocel:
         page.fill("#fono", fonocel)
     page.select_option("#sucursal_cita", value=str(sucursal))
-    if doctor_label:
-        page.select_option("#dentista_cita", label=doctor_label)  # NO VERIFICADO en guardado real
+    # OJO: #dentista_cita NO se selecciona aqui a proposito -- ver _select_doctor_verified()
+    # (bug real descubierto 2026-07-01: seleccionarlo temprano se pierde por una carga async
+    # tardia del modal que resetea el campo al primer doctor de la lista).
     if motivo_label:
-        try:
-            page.select_option("#motivo", label=motivo_label)
-        except Exception:
-            pass  # motivo no es obligatorio para guardar_cita() salvo plan_radiologico
+        _select_motivo_fuzzy(page, motivo_label)
     if duracion_min:
         page.fill("#largo", str(duracion_min))
+
+
+def _select_motivo_fuzzy(page, motivo_label: str) -> None:
+    """Selecciona #motivo por coincidencia flexible de texto (no exacta).
+
+    `select_option(label=...)` exige el texto EXACTO de la opcion; en la prueba 2026-07-01
+    "Consulta" no matcheo ninguna opcion (el label real difiere, ej "Consulta General") y el
+    motivo quedo vacio. Aqui se busca la primera opcion cuyo texto CONTENGA motivo_label
+    (case-insensitive) y se selecciona por value. Motivo no es obligatorio para guardar_cita()
+    salvo plan_radiologico, asi que si no hay match no se rompe -- solo se deja sin seleccionar."""
+    val = page.evaluate(
+        """(needle) => {
+            const sel = document.getElementById('motivo');
+            if (!sel) return null;
+            const n = needle.toLowerCase();
+            const opt = Array.from(sel.options).find(
+                o => !o.disabled && o.value && o.value !== '0'
+                     && o.text.toLowerCase().includes(n));
+            return opt ? opt.value : null;
+        }""",
+        motivo_label,
+    )
+    if val:
+        page.select_option("#motivo", value=val)
+
+
+def _select_doctor_verified(page, doctor_label: str, attempts: int = 3) -> None:
+    """Selecciona #dentista_cita y VERIFICA que quedo puesto, reintentando si algo lo reseteo.
+
+    BUG DESCUBIERTO 2026-07-01 (prueba real, cita de prueba): el modal de cita carga la lista de
+    doctores por ajax; una seleccion hecha antes de que esa carga asiente (o interrumpida por
+    otro cambio en el formulario) se pierde SILENCIOSAMENTE, quedando el primer doctor de la
+    lista (alfabetico) en su lugar -- reservaria con el doctor equivocado sin ningun error.
+    Por eso esto se llama AL FINAL, justo antes de #btn_guardar_cita, y se verifica el value
+    real del select despues de cada intento."""
+    if not doctor_label:
+        return
+    for _ in range(attempts):
+        page.select_option("#dentista_cita", label=doctor_label)
+        page.wait_for_timeout(400)
+        selected_text = page.eval_on_selector(
+            "#dentista_cita", "el => el.options[el.selectedIndex].textContent.trim()"
+        )
+        if selected_text == doctor_label:
+            return
+    raise RuntimeError(
+        f"No se pudo fijar el doctor '{doctor_label}' en #dentista_cita (se resetea solo, "
+        f"quedo en '{selected_text}' tras {attempts} intentos)"
+    )
 
 
 def create_appointment(
@@ -177,6 +224,12 @@ def create_appointment(
             )
             page.wait_for_selector("#modal_cita.show, #modal_cita.in, #btn_guardar_cita",
                                    timeout=5000)
+            # BUG DESCUBIERTO 2026-07-01 (prueba real): el modal recien abierto todavia carga la
+            # lista de doctores por ajax; si #dentista_cita se selecciona demasiado pronto, esa
+            # carga tardia LO RESETEA al primer doctor de la lista (Adriana Abreu) sin avisar,
+            # silenciosamente reservando con el doctor equivocado. Verificado en vivo: esperar a
+            # que esa carga asiente antes de tocar el campo evita el reset.
+            page.wait_for_timeout(2000)
             _set_patient_name_fields(page, patient_name)
             _fill_cita_form(
                 page, rut=cedula or "1-9", fonocel=phone, email="", sucursal=sucursal,
@@ -189,14 +242,28 @@ def create_appointment(
             page.select_option("#aniocita", anio)
             page.select_option("#horac", hh.zfill(2))
             page.select_option("#minutos", mm.zfill(2))
+            # Doctor AL FINAL, justo antes de guardar: el select se resetea al primer doctor si se
+            # toca antes de que asiente la carga async del modal (bug 2026-07-01). Verifica y aborta
+            # si no queda fijo, en vez de reservar en silencio con el doctor equivocado.
+            _select_doctor_verified(page, specialty)
+            # Detecta si la cédula ya pertenece a un paciente registrado: Dentidesk autocompleta el
+            # oculto #id_paciente al reconocer la cédula. Si trae valor, el paciente YA existe (no es
+            # alta nueva) — se reporta al caller para que Carla vincule la ficha existente en vez de
+            # intentar crear un duplicado (que el CRM rechaza). Informativo: no bloquea el agendado,
+            # porque una cita para un paciente existente es válida. Ver memoria
+            # dentidesk-prueba-agendado-2026-07-01.
+            id_paciente_detectado = (page.input_value("#id_paciente") or "").strip()
+            paciente_existe = bool(id_paciente_detectado and id_paciente_detectado != "0")
             with page.expect_response(lambda r: "ajaxAgenda.php" in r.url, timeout=15000) as resp_info:
                 page.click("#btn_guardar_cita")
             data = resp_info.value.json()
             page.goto(AGENDA_URL, wait_until="networkidle")  # vuelve a Agenda/Hoy al terminar
             if not data.get("id_agenda"):
-                return {"success": False, "error": "guardar_cita_fallo", "raw": data}
+                return {"success": False, "error": "guardar_cita_fallo", "raw": data,
+                        "paciente_existe": paciente_existe}
             return {"success": True, "IdAgenda": data.get("id_agenda"),
-                    "IdPaciente": data.get("id_paciente")}
+                    "IdPaciente": data.get("id_paciente"),
+                    "paciente_existe": paciente_existe}
         finally:
             browser.close()
 
