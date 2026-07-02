@@ -52,9 +52,12 @@ def main():
                 pass
             print(">>> En la ventana: marca 'No soy un robot' y pulsa 'Iniciar sesion'. (180s)",
                   flush=True)
+            t_captcha = time.perf_counter()  # cronometro: desde que aparece el captcha/login
             try:
                 page.wait_for_function("() => !document.title.includes('Inicio de Sesi')",
                                        timeout=180000)
+                print(f">>> LOGIN OK — captcha+login tardo {time.perf_counter() - t_captcha:.1f}s",
+                      flush=True)
             except Exception:
                 print("No se detecto login (timeout). Daemon sigue corriendo igual; reintenta "
                       "manualmente en la ventana.", flush=True)
