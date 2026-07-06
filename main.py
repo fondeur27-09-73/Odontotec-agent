@@ -30,7 +30,19 @@ async def lifespan(app):
     # escribible, que falle el arranque con error claro, no el primer import.
     from integrations import db
     db.init_db()
-    yield
+    # Scheduler de recordatorios 48h/24h. Si APScheduler no está instalado o falla, no debe tumbar
+    # el arranque del agente (Carla sigue respondiendo aunque los recordatorios no corran).
+    scheduler = None
+    try:
+        from scheduler.reminders import start_scheduler
+        scheduler = start_scheduler()
+    except Exception as e:
+        logger.error(f"No se pudo iniciar el scheduler de recordatorios: {e}")
+    try:
+        yield
+    finally:
+        if scheduler is not None:
+            scheduler.shutdown(wait=False)
 
 app = FastAPI(title="Odontotec Agent", lifespan=lifespan)
 
@@ -84,6 +96,58 @@ async def _process_message(conv_id: int, phone: str, content: str):
 def _is_incoming(message_type) -> bool:
     return message_type == 0 or message_type == "incoming"
 
+
+def _norm_txt(s: str) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFD", str(s)).encode("ascii", "ignore").decode()
+    return s.lower().strip()
+
+
+def _button_action(content: str) -> str | None:
+    """Detecta la respuesta de botón de la plantilla de confirmación. El texto entrante puede
+    traer emoji/acentos ('✅ Confirmar', 'Reagendar'); se normaliza y se busca la palabra clave."""
+    t = _norm_txt(content)
+    if "confirmar" in t:
+        return "CONFIRMAR"
+    if "cancelar" in t:
+        return "CANCELAR"
+    if "reagendar" in t or "reprogramar" in t:
+        return "REAGENDAR"
+    return None
+
+
+async def _handle_button(conv_id: int, phone: str, action: str) -> None:
+    """Ejecuta la acción del botón de forma determinista (sin LLM): CONFIRMAR/CANCELAR pegan
+    directo a la API de Dentidesk (rápido, sin navegador). REAGENDAR NO entra aquí — se deja
+    al flujo Carla. Mapea teléfono→IdAgenda vía el registro del recordatorio."""
+    from integrations import dentidesk, db
+    from integrations.chatwoot import send_message, is_bot_off
+    try:
+        if await asyncio.to_thread(is_bot_off, conv_id):
+            logger.info(f"_handle_button skip conv={conv_id}: bot-off")
+            return
+        cita = await asyncio.to_thread(db.buscar_cita_por_phone, phone)
+        if not cita:
+            logger.warning(f"_handle_button conv={conv_id}: sin cita para phone={phone}")
+            send_message(conv_id, "No encontramos una cita asociada a este número. "
+                                  "Por favor escríbanos y con gusto le ayudamos.")
+            return
+        id_agenda = cita["id_agenda"]
+        location = cita.get("location")
+        if action == "CONFIRMAR":
+            await asyncio.to_thread(dentidesk.confirm_appointment, id_agenda, location)
+            send_message(conv_id, "¡Listo! Su cita quedó confirmada. ¡Le esperamos! 🦷")
+        elif action == "CANCELAR":
+            await asyncio.to_thread(
+                dentidesk.update_status, id_agenda,
+                dentidesk.STATUS["cancelado_email"], location)
+            send_message(conv_id, "Su cita fue cancelada. Cuando quiera reagendar, escríbanos.")
+        await asyncio.to_thread(db.guardar_respuesta, id_agenda, action)
+        logger.info(f"_handle_button conv={conv_id} action={action} id_agenda={id_agenda} OK")
+    except Exception as e:
+        logger.error(f"_handle_button conv={conv_id} action={action}: {e}", exc_info=True)
+        send_message(conv_id, "Tuvimos un problema procesando su respuesta. Un momento, le ayudamos.")
+
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
     # Auth por token compartido: sin esto, cualquiera que alcance la URL puede forjar payloads
@@ -126,6 +190,14 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     if not content:
         return {"status": "empty"}
+
+    # Interceptor de botones de la plantilla de confirmación: CONFIRMAR/CANCELAR se resuelven
+    # deterministas (API Dentidesk, sin LLM ni navegador). REAGENDAR sí cae al agente para pedir
+    # la nueva fecha.
+    action = _button_action(content)
+    if action in ("CONFIRMAR", "CANCELAR"):
+        background_tasks.add_task(_handle_button, conv_id, phone, action)
+        return {"status": "button", "action": action}
 
     background_tasks.add_task(_process_message, conv_id, phone, content)
     return {"status": "ok"}
