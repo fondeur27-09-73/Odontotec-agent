@@ -68,6 +68,21 @@ def test_bot_off_en_chatwoot_no_corre_agente():
         mock_send.assert_not_called()
 
 
+def test_webhook_secret_rechaza_sin_token(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_SECRET", "s3creto")
+    assert client.post("/webhook", json=PAYLOAD).status_code == 401
+
+
+def test_webhook_secret_acepta_token_correcto(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_SECRET", "s3creto")
+    with patch("integrations.chatwoot.get_labels", return_value=[]), \
+         patch("agent.claude.run_agent", return_value="Hola."), \
+         patch("integrations.chatwoot.send_message"):
+        resp = client.post("/webhook?token=s3creto", json=PAYLOAD)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
 def test_processes_message():
     with patch("integrations.chatwoot.get_labels", return_value=[]), \
          patch("integrations.supabase_client.ensure_patient"), \

@@ -1,8 +1,9 @@
 import os
+import hmac
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -87,6 +88,19 @@ def _is_incoming(message_type) -> bool:
 
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
+    # Auth por token compartido: sin esto, cualquiera que alcance la URL puede forjar payloads
+    # (Carla contestaría y escribiría en el CRM). Chatwoot no firma webhooks -> se agrega
+    # ?token=XXX a la URL del webhook en Chatwoot y se valida aquí. Si WEBHOOK_SECRET no está
+    # definido, se acepta todo (compatibilidad hasta configurar ambos lados) y se avisa en logs.
+    secret = os.getenv("WEBHOOK_SECRET", "")
+    if secret:
+        supplied = request.query_params.get("token", "") or request.headers.get("x-webhook-token", "")
+        if not hmac.compare_digest(supplied, secret):
+            logger.warning("webhook rechazado: token inválido o ausente")
+            raise HTTPException(status_code=401, detail="unauthorized")
+    else:
+        logger.warning("WEBHOOK_SECRET no configurado — el webhook acepta cualquier origen")
+
     payload = await request.json()
     logger.info(f"webhook payload: {payload}")
 
