@@ -1,28 +1,21 @@
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 for k, v in {
     "CHATWOOT_URL": "https://chatwoot.test.com",
     "CHATWOOT_API_TOKEN": "token",
     "CHATWOOT_ACCOUNT_ID": "1",
     "BOT_OFF_LABEL": "bot-off",
-    "ANTHROPIC_API_KEY": "test",
-    "CLAUDE_MODEL": "claude-haiku-4-5-20251001",
     "MAX_HISTORY": "20",
-    "CALCOM_URL": "https://calcom.test.com",
-    "CALCOM_API_KEY": "test",
-    "CALCOM_EVENTS": '{"general":1}',
-    "SUPABASE_URL": "https://test.supabase.co",
-    "SUPABASE_SERVICE_KEY": "test",
     "OPENAI_API_KEY": "test",
     "TIMEZONE": "America/Santo_Domingo",
+    "DB_PATH": "./.pytest_cache/test_odontotec.db",
 }.items():
     os.environ.setdefault(k, v)
 
-with patch("scheduler.reminders.start_scheduler", return_value=MagicMock()):
-    from fastapi.testclient import TestClient
-    from main import app
-    client = TestClient(app)
+from fastapi.testclient import TestClient
+from main import app
+client = TestClient(app)
 
 PAYLOAD = {
     "event": "message_created",
@@ -85,11 +78,7 @@ def test_webhook_secret_acepta_token_correcto(monkeypatch):
 
 def test_processes_message():
     with patch("integrations.chatwoot.get_labels", return_value=[]), \
-         patch("integrations.supabase_client.ensure_patient"), \
-         patch("integrations.supabase_client.save_message"), \
-         patch("integrations.supabase_client.get_messages", return_value=[
-             {"role": "user", "content": "Hola", "msg_type": "text"}
-         ]), \
+         patch("main._build_history", return_value=[]), \
          patch("agent.claude.run_agent", return_value="Hola, soy Carla."), \
          patch("integrations.chatwoot.send_message") as mock_send:
         resp = client.post("/webhook", json=PAYLOAD)

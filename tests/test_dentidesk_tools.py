@@ -97,6 +97,20 @@ def test_agendar_hora_invalida_no_llama_playwright():
     mock_pw.assert_not_called()
 
 
+def test_escalate_agrega_label_bot_off():
+    with patch("integrations.chatwoot.add_label") as mock_label, \
+         patch("integrations.chatwoot.get_labels", return_value=[]):
+        result = json.loads(handle_tool("escalate_to_human",
+                                        {"reason": "recado", "conversation_id": 42}))
+    mock_label.assert_called_once_with(42, "bot-off")
+    assert result["success"] is True
+
+
+def test_tool_desconocida_devuelve_error():
+    result = json.loads(handle_tool("nonexistent", {}))
+    assert "error" in result
+
+
 def test_agendar_general_sin_doctor_llega_a_playwright():
     # general = personal fijo: se agenda SIN seleccionar doctor (doctor_label="").
     with patch("agent.tool_handlers.dentidesk_playwright.create_appointment",

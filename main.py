@@ -24,15 +24,13 @@ def _conv_lock(conv_id: int) -> asyncio.Lock:
         lock = _conv_locks.setdefault(conv_id, asyncio.Lock())
     return lock
 
-_scheduler = None
-
 @asynccontextmanager
 async def lifespan(app):
-    global _scheduler
-    from scheduler.reminders import start_scheduler
-    _scheduler = start_scheduler()
+    # init_db aquí y no como efecto secundario de importar agent.tool_handlers: si /data no es
+    # escribible, que falle el arranque con error claro, no el primer import.
+    from integrations import db
+    db.init_db()
     yield
-    _scheduler.shutdown()
 
 app = FastAPI(title="Odontotec Agent", lifespan=lifespan)
 

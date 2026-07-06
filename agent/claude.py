@@ -120,18 +120,6 @@ OPENAI_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "transcribe_audio",
-            "description": "Transcribe nota de voz a texto. Usar cuando el paciente envíe audio.",
-            "parameters": {
-                "type": "object",
-                "properties": {"audio_url": {"type": "string"}},
-                "required": ["audio_url"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "escalate_to_human",
             "description": "Transfiere la conversación a un humano. Usar solo si el paciente lo pide explícitamente o está molesto.",
             "parameters": {
@@ -206,8 +194,13 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
         if msg.tool_calls:
             messages.append(msg)
             for tc in msg.tool_calls:
-                args = json.loads(tc.function.arguments)
-                result = handle_tool(tc.function.name, args)
+                # args malformados del modelo no deben tumbar el turno entero (el paciente se
+                # quedaba sin respuesta): se devuelven como error de tool y el modelo corrige.
+                try:
+                    args = json.loads(tc.function.arguments)
+                    result = handle_tool(tc.function.name, args)
+                except (json.JSONDecodeError, TypeError) as e:
+                    result = json.dumps({"error": f"argumentos inválidos: {e}"})
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
