@@ -133,6 +133,24 @@ def _agendar_cita_dentidesk(
         return {"success": False, "error": "doctor_no_mapeado",
                 "message": f"No hay doctor configurado para la especialidad '{specialty}'."}
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
+    # Idempotencia (best-effort): si el paciente YA tiene cita ese día en la agenda real, NO crear
+    # otra. Cubre el doble-clic del modelo (llamar la tool dos veces pese al "UNA SOLA VEZ") y dos
+    # mensajes procesados casi a la vez. Si la consulta falla (red/API), se sigue con el agendado:
+    # peor un duplicado raro que bloquear citas legítimas.
+    try:
+        existente = None
+        if cedula:
+            existente = dentidesk.find_by_cedula(cedula, fecha_iso, loc)
+        if existente is None and patient_phone:
+            existente = dentidesk.find_by_phone(patient_phone, fecha_iso, loc)
+        if existente:
+            return {"success": True, "ya_existia": True,
+                    "IdAgenda": existente.get("IdAgenda"),
+                    "paciente": existente.get("PatientName"),
+                    "fecha": existente.get("Date"), "hora": existente.get("time"),
+                    "message": "El paciente ya tiene una cita registrada ese día; no se creó otra."}
+    except Exception:
+        pass
     res = dentidesk_playwright.create_appointment(
         cedula=cedula, patient_name=patient_name, phone=patient_phone,
         doctor_label=doctor, fecha_iso=fecha_iso, time=time24,

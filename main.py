@@ -12,6 +12,17 @@ MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("odontotec")
 
+# Un lock por conversación: dos mensajes rápidos del mismo paciente disparaban dos run_agent en
+# paralelo (respuestas duplicadas y riesgo de doble agendado con dos navegadores a la vez).
+# Con el lock se procesan en serie; conversaciones distintas siguen en paralelo.
+_conv_locks: dict[int, asyncio.Lock] = {}
+
+def _conv_lock(conv_id: int) -> asyncio.Lock:
+    lock = _conv_locks.get(conv_id)
+    if lock is None:
+        lock = _conv_locks.setdefault(conv_id, asyncio.Lock())
+    return lock
+
 _scheduler = None
 
 @asynccontextmanager
@@ -52,21 +63,22 @@ async def _process_message(conv_id: int, phone: str, content: str):
         from integrations.chatwoot import send_message, is_bot_off
         from agent.claude import run_agent
 
-        # Conversación escalada a humano (label bot-off): Carla NO contesta encima del agente
-        # humano. Sin este chequeo, escalate_to_human ponía el label pero el webhook seguía
-        # procesando cada mensaje entrante como si nada (bug auditoría 2026-07-05, #4).
-        if await asyncio.to_thread(is_bot_off, conv_id):
-            logger.info(f"_process_message skip conv={conv_id}: bot-off (escalada a humano)")
-            return
+        async with _conv_lock(conv_id):
+            # Conversación escalada a humano (label bot-off): Carla NO contesta encima del agente
+            # humano. Sin este chequeo, escalate_to_human ponía el label pero el webhook seguía
+            # procesando cada mensaje entrante como si nada (bug auditoría 2026-07-05, #4).
+            if await asyncio.to_thread(is_bot_off, conv_id):
+                logger.info(f"_process_message skip conv={conv_id}: bot-off (escalada a humano)")
+                return
 
-        history = _build_history(conv_id)
-        if not history or history[-1].get("role") != "user" or history[-1].get("content") != content:
-            history.append({"role": "user", "content": content})
+            history = _build_history(conv_id)
+            if not history or history[-1].get("role") != "user" or history[-1].get("content") != content:
+                history.append({"role": "user", "content": content})
 
-        response_text = await asyncio.to_thread(run_agent, history, conv_id, phone)
-        logger.info(f"_process_message response conv={conv_id}: {response_text!r}")
-        send_message(conv_id, response_text)
-        logger.info(f"_process_message sent conv={conv_id}")
+            response_text = await asyncio.to_thread(run_agent, history, conv_id, phone)
+            logger.info(f"_process_message response conv={conv_id}: {response_text!r}")
+            send_message(conv_id, response_text)
+            logger.info(f"_process_message sent conv={conv_id}")
     except Exception as e:
         logger.error(f"Error processing message conv={conv_id} phone={phone}: {e}", exc_info=True)
 

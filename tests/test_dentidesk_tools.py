@@ -73,6 +73,14 @@ def test_resolve_doctor_env_malformado_no_rompe(monkeypatch):
 
 # --- handle_tool: errores estructurados ANTES de tocar Playwright ---
 
+@pytest.fixture(autouse=True)
+def _sin_agenda_previa(monkeypatch):
+    """Aísla el chequeo de idempotencia: por defecto la agenda real no tiene cita previa
+    (y nunca se pega a la API de Dentidesk desde los tests)."""
+    monkeypatch.setattr("agent.tool_handlers.dentidesk.find_by_cedula", lambda *a, **k: None)
+    monkeypatch.setattr("agent.tool_handlers.dentidesk.find_by_phone", lambda *a, **k: None)
+
+
 _BASE_ARGS = {
     "patient_name": "Juan Pérez", "patient_phone": "+18091234567",
     "specialty": "ortodoncia", "day": "lunes 6 de julio",
@@ -129,6 +137,36 @@ def test_reagendar_pasa_hora_24h():
         }))
     assert result["success"] is True
     assert mock_pw.call_args.kwargs["nueva_hora"] == "16:30"
+
+
+def test_agendar_idempotente_si_ya_hay_cita_ese_dia(monkeypatch):
+    # Doble llamada del modelo (o dos mensajes casi simultáneos): si la agenda real ya tiene
+    # cita del paciente ese día, NO se abre Playwright ni se crea duplicado.
+    monkeypatch.setattr(
+        "agent.tool_handlers.dentidesk.find_by_phone",
+        lambda *a, **k: {"IdAgenda": "555", "PatientName": "Juan Pérez",
+                         "Date": "2026-07-06", "time": "10:00"},
+    )
+    with patch("agent.tool_handlers.dentidesk_playwright.create_appointment") as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk",
+                                        {**_BASE_ARGS, "time": "10:00 AM"}))
+    assert result["success"] is True
+    assert result["ya_existia"] is True
+    assert result["IdAgenda"] == "555"
+    mock_pw.assert_not_called()
+
+
+def test_agendar_sigue_si_chequeo_idempotencia_falla(monkeypatch):
+    # La consulta a la agenda es best-effort: si la API falla, el agendado continúa.
+    def _boom(*a, **k):
+        raise RuntimeError("API caída")
+    monkeypatch.setattr("agent.tool_handlers.dentidesk.find_by_phone", _boom)
+    with patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
+               return_value={"success": True, "IdAgenda": "777"}):
+        result = json.loads(handle_tool("agendar_cita_dentidesk",
+                                        {**_BASE_ARGS, "time": "10:00 AM"}))
+    assert result["success"] is True
+    assert result["IdAgenda"] == "777"
 
 
 def test_agendar_fuera_de_horario_gana_antes_que_hora_invalida():
