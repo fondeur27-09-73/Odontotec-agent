@@ -55,6 +55,19 @@ def test_ignores_bot_off_label():
     assert client.post("/webhook", json=payload).json()["status"] == "ok"
 
 
+def test_bot_off_en_chatwoot_no_corre_agente():
+    # Bug auditoría 2026-07-05 #4: tras escalate_to_human (label bot-off), Carla NO debe
+    # contestar encima del humano. El chequeo vive en _process_message (consulta labels reales
+    # en Chatwoot, no el payload del webhook).
+    with patch("integrations.chatwoot.get_labels", return_value=["bot-off"]), \
+         patch("agent.claude.run_agent") as mock_agent, \
+         patch("integrations.chatwoot.send_message") as mock_send:
+        resp = client.post("/webhook", json=PAYLOAD)
+        assert resp.json()["status"] == "ok"
+        mock_agent.assert_not_called()
+        mock_send.assert_not_called()
+
+
 def test_processes_message():
     with patch("integrations.chatwoot.get_labels", return_value=[]), \
          patch("integrations.supabase_client.ensure_patient"), \

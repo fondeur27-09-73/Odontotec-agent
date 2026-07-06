@@ -49,8 +49,15 @@ def _build_history(conv_id: int) -> list[dict]:
 async def _process_message(conv_id: int, phone: str, content: str):
     logger.info(f"_process_message start conv={conv_id} phone={phone} content={content!r}")
     try:
-        from integrations.chatwoot import send_message
+        from integrations.chatwoot import send_message, is_bot_off
         from agent.claude import run_agent
+
+        # Conversación escalada a humano (label bot-off): Carla NO contesta encima del agente
+        # humano. Sin este chequeo, escalate_to_human ponía el label pero el webhook seguía
+        # procesando cada mensaje entrante como si nada (bug auditoría 2026-07-05, #4).
+        if await asyncio.to_thread(is_bot_off, conv_id):
+            logger.info(f"_process_message skip conv={conv_id}: bot-off (escalada a humano)")
+            return
 
         history = _build_history(conv_id)
         if not history or history[-1].get("role") != "user" or history[-1].get("content") != content:
