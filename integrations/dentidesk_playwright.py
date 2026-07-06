@@ -135,6 +135,26 @@ def _goto_calendar_date(page, anio: int, mes: int, dia: int) -> None:
     page.wait_for_load_state("networkidle")
 
 
+def _wait_doctors_loaded(page, cap_ms: int = 2500) -> None:
+    """Espera a que el modal termine de cargar la lista de doctores (#dentista_cita) por ajax,
+    en vez de dormir un tiempo fijo. Antes: wait_for_timeout(2000) siempre. Ahora: retorna apenas
+    hay >1 opción (caso común, suele ser <2000ms) y como MÁXIMO espera cap_ms.
+
+    Motivo del wait (bug 2026-07-01): si #dentista_cita se toca antes de que asiente esta carga,
+    la carga tardía lo resetea al primer doctor SILENCIOSAMENTE. _select_doctor_verified (que corre
+    después) igual verifica y reintenta, así que este wait es la primera línea, no la única."""
+    try:
+        page.wait_for_function(
+            "() => { const s = document.getElementById('dentista_cita');"
+            " return s && s.options.length > 1; }",
+            timeout=cap_ms,
+        )
+    except Exception:
+        # Si no cargó en el tope, seguimos: _select_doctor_verified detecta y aborta si el doctor
+        # pedido no está, en vez de reservar con el equivocado.
+        pass
+
+
 def _set_patient_name_fields(page, nombre_completo: str) -> None:
     """Llena el nombre del paciente en AMBOS inputs que usa el formulario de cita: el visible
     #nombre_norden y el oculto #nombre (este último es el que guardar_cita() realmente lee)."""
@@ -276,8 +296,9 @@ def create_appointment(
             # lista de doctores por ajax; si #dentista_cita se selecciona demasiado pronto, esa
             # carga tardia LO RESETEA al primer doctor de la lista (Adriana Abreu) sin avisar,
             # silenciosamente reservando con el doctor equivocado. Verificado en vivo: esperar a
-            # que esa carga asiente antes de tocar el campo evita el reset.
-            page.wait_for_timeout(2000)
+            # que esa carga asiente antes de tocar el campo evita el reset. Espera por CONDICIÓN
+            # (lista de doctores cargada) en vez de 2000ms fijos: más rápido cuando carga rápido.
+            _wait_doctors_loaded(page)
             _set_patient_name_fields(page, patient_name)
             _fill_cita_form(
                 page, rut=cedula or "1-9", fonocel=phone, email="", sucursal=sucursal,
@@ -305,7 +326,9 @@ def create_appointment(
             with page.expect_response(lambda r: "ajaxAgenda.php" in r.url, timeout=15000) as resp_info:
                 page.click("#btn_guardar_cita")
             data = resp_info.value.json()
-            page.goto(AGENDA_URL, wait_until="networkidle")  # vuelve a Agenda/Hoy al terminar
+            # (Antes había un page.goto(AGENDA_URL, networkidle) aquí "para volver a Hoy": puro
+            # desperdicio — la cita ya está guardada (data capturada) y el navegador se cierra en
+            # el finally. Se quitó: ahorra un networkidle por agendado sin cambiar el resultado.)
             if not data.get("id_agenda"):
                 return {"success": False, "error": "guardar_cita_fallo", "raw": data,
                         "paciente_existe": paciente_existe}
@@ -348,8 +371,6 @@ def move_appointment(
             # repetido en otra fila/columna podría abrir una cita distinta con el mismo paciente).
             abierto = page.input_value("#id_agenda")
             if abierto and str(abierto) != str(id_agenda):
-                page.click("text=Cerrar")
-                page.goto(AGENDA_URL, wait_until="networkidle")  # vuelve a Agenda/Hoy al terminar
                 return {"success": False, "error": "id_agenda_no_coincide",
                         "esperado": id_agenda, "abierto": abierto}
             page.select_option("#diacita", dia)
@@ -360,7 +381,8 @@ def move_appointment(
             with page.expect_response(lambda r: "ajaxAgenda.php" in r.url, timeout=15000) as resp_info:
                 page.click("#btn_guardar_cita")
             data = resp_info.value.json()
-            page.goto(AGENDA_URL, wait_until="networkidle")  # vuelve a Agenda/Hoy al terminar
+            # (goto AGENDA_URL redundante eliminado: la cita ya se movió y el navegador se cierra
+            # en el finally. Ahorra un networkidle por reagendado.)
             if not data.get("id_agenda"):
                 return {"success": False, "error": "guardar_cita_fallo", "raw": data}
             return {"success": True, "IdAgenda": data.get("id_agenda")}
