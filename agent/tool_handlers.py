@@ -40,6 +40,16 @@ def _parse_minutes(time_str: str) -> int | None:
     return hh * 60 + mm
 
 
+def _to_24h(time_str: str) -> str | None:
+    """Normaliza cualquier hora que mande el modelo ('10:00 AM', '3 pm', '14:00') a 'HH:MM' 24h.
+    Playwright selecciona #horac/#minutos por valor numérico: pasarle '3:00 PM' crudo selecciona
+    las 03:00 de la madrugada (o revienta con mm='00 PM'). Devuelve None si no se puede parsear."""
+    mins = _parse_minutes(time_str)
+    if mins is None:
+        return None
+    return f"{mins // 60:02d}:{mins % 60:02d}"
+
+
 def _within_clinic_hours(fecha_iso: str, time_str: str) -> tuple[bool, str]:
     """Valida fecha+hora contra el horario. Si no se puede parsear, permite (lenient)
     para no bloquear casos legítimos; solo bloquea lo que es claramente fuera de horario."""
@@ -114,10 +124,18 @@ def _agendar_cita_dentidesk(
     ok, msg = _within_clinic_hours(fecha_iso, time)
     if not ok:
         return {"success": False, "error": "fuera_de_horario", "message": msg}
+    time24 = _to_24h(time)
+    if time24 is None:
+        return {"success": False, "error": "hora_invalida",
+                "message": f"No entendí la hora '{time}'. Pida la hora de nuevo, ej: 10:00 AM."}
+    doctor = _resolve_doctor(specialty)
+    if doctor is None:
+        return {"success": False, "error": "doctor_no_mapeado",
+                "message": f"No hay doctor configurado para la especialidad '{specialty}'."}
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
     res = dentidesk_playwright.create_appointment(
         cedula=cedula, patient_name=patient_name, phone=patient_phone,
-        specialty=specialty, fecha_iso=fecha_iso, time=time,
+        doctor_label=doctor, fecha_iso=fecha_iso, time=time24,
         procedimiento=procedimiento, sucursal=loc,
     )
     return {"success": True, **(res if isinstance(res, dict) else {"result": res})}
@@ -138,10 +156,14 @@ def _reagendar_cita_dentidesk(
     ok, msg = _within_clinic_hours(fecha_iso, time)
     if not ok:
         return {"success": False, "error": "fuera_de_horario", "message": msg}
+    time24 = _to_24h(time)
+    if time24 is None:
+        return {"success": False, "error": "hora_invalida",
+                "message": f"No entendí la hora '{time}'. Pida la hora de nuevo, ej: 10:00 AM."}
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
     res = dentidesk_playwright.move_appointment(
         id_agenda=id_agenda, fecha_actual_iso=fecha_actual_iso, patient_name=patient_name,
-        nueva_fecha_iso=fecha_iso, nueva_hora=time, sucursal=loc,
+        nueva_fecha_iso=fecha_iso, nueva_hora=time24, sucursal=loc,
     )
     return {"success": True, **(res if isinstance(res, dict) else {"result": res})}
 
@@ -151,6 +173,39 @@ _LOCATION_ALIAS = {
     "naco": "215", "215": "215",
     "haina": "216", "216": "216",
 }
+
+
+# Especialidad (valor del tool) -> doctor al que se agenda en Dentidesk. El <select #dentista_cita>
+# lista NOMBRES de doctor, no especialidades: pasarle "general" no matchea nada y la cita no se
+# guarda. Los valores son "needles" (apellido distintivo) que dentidesk_playwright matchea de forma
+# flexible contra el texto real de la opción. Defaults = primer doctor de cada especialidad según la
+# lista del cliente (agent/prompts.py). Sobreescribible completo por env DENTIDESK_DOCTOR_MAP (JSON
+# {"especialidad": "needle"}), p.ej. para fijar el personal de odontología general, que el cliente
+# maneja como personal fijo sin especialista.
+_DOCTOR_DEFAULTS = {
+    "ortodoncia": "Cabrera",        # Dra. Altemi Cabrera Sime
+    "cirugia": "Angel Lee",         # Dr. Angel Lee
+    "endodoncia": "Cedano",         # Dra. Aimer Cedano
+    "protesis": "Adriana Abreu",    # Dra. Adriana Abreu
+    "odontopediatria": "Bastidas",  # Dra. Daniela Bastidas
+    # "general" = "" a propósito: regla del cliente (2026-07-05) — odontología general la atiende
+    # personal FIJO y la cita NO se registra por nombre de doctor. "" = no tocar #dentista_cita
+    # (queda el valor que Dentidesk ponga por defecto en el modal).
+    "general": "",
+}
+
+
+def _resolve_doctor(specialty: str) -> str | None:
+    """Needle de doctor para una especialidad. "" = válido, significa NO seleccionar doctor
+    (personal fijo, caso "general"). None = especialidad sin mapeo (error del caller)."""
+    doctor_map = dict(_DOCTOR_DEFAULTS)
+    override = os.getenv("DENTIDESK_DOCTOR_MAP", "")
+    if override:
+        try:
+            doctor_map.update(json.loads(override))
+        except json.JSONDecodeError:
+            pass  # env malformado no debe tumbar el agendado; quedan los defaults
+    return doctor_map.get(str(specialty).strip().lower())
 
 
 def _buscar_cita_dentidesk(

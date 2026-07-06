@@ -50,6 +50,19 @@ def _require_writes_enabled():
         )
 
 
+def _split_time_24h(time_str: str) -> tuple[str, str]:
+    """Valida y separa una hora 24h 'HH:MM' -> ('HH', 'MM'). Rechaza cualquier otro formato
+    ('10:00 AM', '3pm'): los selects #horac/#minutos toman valores numéricos y una hora con
+    sufijo AM/PM o sin normalizar guardaría la cita a la hora equivocada (o reventaría)."""
+    import re
+    m = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", str(time_str).strip())
+    if not m:
+        raise ValueError(
+            f"Hora {time_str!r} inválida: se espera 24h 'HH:MM' (el caller normaliza con _to_24h)"
+        )
+    return m.group(1).zfill(2), m.group(2)
+
+
 def _login(page):
     """Inicia sesión en la UI web. Selectores capturados 2026-06-27."""
     if not WEB_USER or not WEB_PASS:
@@ -170,47 +183,82 @@ def _select_motivo_fuzzy(page, motivo_label: str) -> None:
         page.select_option("#motivo", value=val)
 
 
+_NORMALIZE_JS = """(s) => s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').trim()"""
+
+
 def _select_doctor_verified(page, doctor_label: str, attempts: int = 3) -> None:
-    """Selecciona #dentista_cita y VERIFICA que quedo puesto, reintentando si algo lo reseteo.
+    """Selecciona #dentista_cita por coincidencia FLEXIBLE y VERIFICA que quedo puesto,
+    reintentando si algo lo reseteo.
+
+    Coincidencia flexible (no `label=` exacto): el select lista los nombres tal cual estan en la
+    BD del CRM ("ALTEMI CABRERA", "Dra. Altemi Cabrera Sime", con/sin tildes...), que no tienen
+    por que coincidir letra a letra con la lista del cliente. Se busca la primera opcion cuyo
+    texto normalizado (minusculas, sin tildes) CONTENGA doctor_label normalizado; si ninguna
+    matchea se aborta con error claro en vez de guardar con el doctor que este puesto.
 
     BUG DESCUBIERTO 2026-07-01 (prueba real, cita de prueba): el modal de cita carga la lista de
     doctores por ajax; una seleccion hecha antes de que esa carga asiente (o interrumpida por
     otro cambio en el formulario) se pierde SILENCIOSAMENTE, quedando el primer doctor de la
     lista (alfabetico) en su lugar -- reservaria con el doctor equivocado sin ningun error.
-    Por eso esto se llama AL FINAL, justo antes de #btn_guardar_cita, y se verifica el value
+    Por eso esto se llama AL FINAL, justo antes de #btn_guardar_cita, y se verifica el texto
     real del select despues de cada intento."""
     if not doctor_label:
         return
+    find_option_js = """(needle) => {
+        const norm = %s;
+        const sel = document.getElementById('dentista_cita');
+        if (!sel) return null;
+        const n = norm(needle);
+        const opt = Array.from(sel.options).find(
+            o => !o.disabled && o.value && o.value !== '0' && norm(o.text).includes(n));
+        return opt ? opt.value : null;
+    }""" % _NORMALIZE_JS
+    check_selected_js = """(needle) => {
+        const norm = %s;
+        const sel = document.getElementById('dentista_cita');
+        const opt = sel.options[sel.selectedIndex];
+        return opt && norm(opt.text).includes(norm(needle)) ? opt.text.trim() : null;
+    }""" % _NORMALIZE_JS
+    selected_text = None
     for _ in range(attempts):
-        page.select_option("#dentista_cita", label=doctor_label)
+        val = page.evaluate(find_option_js, doctor_label)
+        if val is None:
+            opciones = page.eval_on_selector(
+                "#dentista_cita",
+                "el => Array.from(el.options).map(o => o.text.trim()).filter(Boolean).join(' | ')",
+            )
+            raise RuntimeError(
+                f"Doctor '{doctor_label}' no existe en #dentista_cita. Opciones: {opciones}"
+            )
+        page.select_option("#dentista_cita", value=val)
         page.wait_for_timeout(400)
-        selected_text = page.eval_on_selector(
-            "#dentista_cita", "el => el.options[el.selectedIndex].textContent.trim()"
-        )
-        if selected_text == doctor_label:
+        selected_text = page.evaluate(check_selected_js, doctor_label)
+        if selected_text:
             return
     raise RuntimeError(
-        f"No se pudo fijar el doctor '{doctor_label}' en #dentista_cita (se resetea solo, "
-        f"quedo en '{selected_text}' tras {attempts} intentos)"
+        f"No se pudo fijar el doctor '{doctor_label}' en #dentista_cita (se resetea solo "
+        f"tras {attempts} intentos)"
     )
 
 
 def create_appointment(
     cedula: str, patient_name: str, phone: str,
-    specialty: str, fecha_iso: str, time: str,
+    doctor_label: str, fecha_iso: str, time: str,
     procedimiento: str = "", sucursal: str = "214",
 ) -> dict:
     """ESCRITURA (UI): crea una cita nueva en Dentidesk. Bajo candado DENTIDESK_ALLOW_WRITES.
 
-    OJO — selección de doctor: `specialty` se usa como label contra el <select id="dentista_cita">,
-    que lista NOMBRES de doctor, no especialidades. Esto solo funciona si el caller ya resolvió
-    `specialty` a un nombre real de doctor (ver Profesionales en agenda). Mapear especialidad→doctor
-    disponible es una decisión de negocio pendiente, fuera del alcance de este mapeo de selectores.
-    """
+    `doctor_label` es el nombre (o fragmento distintivo) del doctor a seleccionar en
+    #dentista_cita — el caller (agent/tool_handlers.py) ya resolvió especialidad→doctor con
+    _resolve_doctor(). La coincidencia contra las opciones reales del select es flexible
+    (ver _select_doctor_verified).
+
+    `time` DEBE venir en 24h 'HH:MM' (el caller normaliza con _to_24h). '3:00 PM' crudo aquí
+    seleccionaría las 03:00 de la madrugada — por eso se valida y se rechaza."""
     _require_writes_enabled()
     from playwright.sync_api import sync_playwright  # import perezoso (ver cabecera)
     anio, mes, dia = fecha_iso[:10].split("-")
-    hh, mm = (time.split(":") + ["00"])[:2]
+    hh, mm = _split_time_24h(time)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
         page = browser.new_page()
@@ -233,7 +281,7 @@ def create_appointment(
             _set_patient_name_fields(page, patient_name)
             _fill_cita_form(
                 page, rut=cedula or "1-9", fonocel=phone, email="", sucursal=sucursal,
-                doctor_label=specialty, motivo_label=procedimiento, duracion_min=30,
+                doctor_label=doctor_label, motivo_label=procedimiento, duracion_min=30,
             )
             # Asegura fecha/hora exactas (open_modal_cita ya las precarga, esto es redundante a
             # propósito por si el caller pide algo distinto del slot inicial).
@@ -245,7 +293,7 @@ def create_appointment(
             # Doctor AL FINAL, justo antes de guardar: el select se resetea al primer doctor si se
             # toca antes de que asiente la carga async del modal (bug 2026-07-01). Verifica y aborta
             # si no queda fijo, en vez de reservar en silencio con el doctor equivocado.
-            _select_doctor_verified(page, specialty)
+            _select_doctor_verified(page, doctor_label)
             # Detecta si la cédula ya pertenece a un paciente registrado: Dentidesk autocompleta el
             # oculto #id_paciente al reconocer la cédula. Si trae valor, el paciente YA existe (no es
             # alta nueva) — se reporta al caller para que Carla vincule la ficha existente en vez de
@@ -286,7 +334,7 @@ def move_appointment(
     from playwright.sync_api import sync_playwright  # import perezoso
     anio_act, mes_act, dia_act = fecha_actual_iso[:10].split("-")
     anio, mes, dia = nueva_fecha_iso[:10].split("-")
-    hh, mm = (nueva_hora.split(":") + ["00"])[:2]
+    hh, mm = _split_time_24h(nueva_hora)  # exige 24h 'HH:MM'; el caller normaliza con _to_24h
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
         page = browser.new_page()
