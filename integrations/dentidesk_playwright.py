@@ -74,6 +74,38 @@ def _login(page):
     page.wait_for_load_state("networkidle")
 
 
+CDP_URL = os.getenv("DENTIDESK_CDP_URL", "")  # ej "http://127.0.0.1:9222"
+
+
+def _open_write_page(p):
+    """Abre la page que van a usar create_appointment/move_appointment para escribir.
+
+    REGLA DEL CLIENTE (2026-07-07): la sesión web de Dentidesk NO expira — una vez logueada, se
+    queda logueada indefinidamente. Por eso la forma correcta de escribir en producción es
+    conectarse por CDP al navegador persistente YA LOGUEADO (`scripts/dentidesk_daemon.py`, login
+    resuelto a mano UNA vez) en vez de lanzar un navegador nuevo y loguear de cero en cada llamada.
+    Loguear de cero cada vez además dispara reCAPTCHA en modo headless sin nadie para resolverlo
+    (BUG 2026-07-07, ver memoria dentidesk-playwright-bugs-2026-07-07) — con el navegador
+    persistente ese problema desaparece porque el login solo pasa una vez.
+
+    Si `DENTIDESK_CDP_URL` está seteado, se conecta a ese navegador y NO se loguea (ya lo está).
+    Si no está seteado (tests, o entorno sin daemon corriendo), cae al modo viejo: navegador nuevo
+    + login fresco — sigue disponible como fallback, con el riesgo de reCAPTCHA ya documentado.
+
+    Devuelve `(page, cerrar)`; `cerrar()` hace lo correcto en cada modo (nunca cierra el navegador
+    persistente ajeno del daemon)."""
+    if CDP_URL:
+        browser = p.chromium.connect_over_cdp(CDP_URL)
+        ctx = browser.contexts[0]
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.bring_to_front()
+        return page, (lambda: None)
+    browser = p.chromium.launch(headless=HEADLESS, channel="chrome")
+    page = browser.new_page()
+    _login(page)
+    return page, browser.close
+
+
 PACIENTES_URL = "https://app.dentidesk.com/pacientes.php"
 
 
@@ -162,6 +194,19 @@ def _set_patient_name_fields(page, nombre_completo: str) -> None:
     page.evaluate("(v) => { document.getElementById('nombre').value = v; }", nombre_completo)
 
 
+def _select_sucursal_safe(page, sucursal: str) -> None:
+    """Selecciona #sucursal_cita solo si hace falta. BUG 2026-07-07: esta cuenta solo tiene UNA
+    sucursal (Arroyo Hondo) y el <select> nativo queda con esa opcion preseleccionada pero con
+    layout colapsado (ancho/alto cero) -- page.select_option() cuelga ~30s esperando "visible" y
+    nunca lo logra, aunque el valor ya sea el correcto. Comparar el value actual antes de tocarlo
+    evita el cuelgue en el caso de 1 sola opcion, y sigue funcionando si el cliente agrega mas
+    sucursales en el futuro (ese caso SI tiene el select interactivo)."""
+    actual = page.eval_on_selector("#sucursal_cita", "el => el.value")
+    if actual == str(sucursal):
+        return
+    page.select_option("#sucursal_cita", value=str(sucursal))
+
+
 def _fill_cita_form(page, *, rut: str, fonocel: str, email: str, sucursal: str,
                      doctor_label: str, motivo_label: str, duracion_min: int) -> None:
     page.fill("#rut", rut)
@@ -169,7 +214,7 @@ def _fill_cita_form(page, *, rut: str, fonocel: str, email: str, sucursal: str,
         page.fill("#email", email)
     if fonocel:
         page.fill("#fono", fonocel)
-    page.select_option("#sucursal_cita", value=str(sucursal))
+    _select_sucursal_safe(page, sucursal)
     # OJO: #dentista_cita NO se selecciona aqui a proposito -- ver _select_doctor_verified()
     # (bug real descubierto 2026-07-01: seleccionarlo temprano se pierde por una carga async
     # tardia del modal que resetea el campo al primer doctor de la lista).
@@ -261,6 +306,55 @@ def _select_doctor_verified(page, doctor_label: str, attempts: int = 3) -> None:
     )
 
 
+def _select_doctor_filter(page, doctor_needle: str) -> bool:
+    """Selecciona el radio de #filtro_profesional (sidebar de home.php) cuyo texto matchea
+    doctor_needle (fuzzy, sin acentos). BUG 2026-07-07: la vista semanal/dia de la agenda SOLO
+    muestra las citas del doctor marcado en ese filtro -- buscar una tarjeta por texto sin
+    seleccionar antes el doctor correcto falla en silencio (timeout) aunque la cita exista, en
+    cuanto hay mas de un doctor involucrado. Devuelve False si no encontro el radio (deja el
+    filtro como estaba, el caller decide si abortar)."""
+    radio_id = page.evaluate(
+        """(needle) => {
+            const norm = s => s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').trim();
+            const n = norm(needle);
+            const radios = Array.from(document.querySelectorAll('input[name=filtro_profesional]'));
+            for (const r of radios) {
+                const li = r.closest('li') || r.parentElement;
+                if (li && norm(li.textContent).includes(n)) return r.id;
+            }
+            return null;
+        }""",
+        doctor_needle,
+    )
+    if not radio_id:
+        return False
+    page.check(f"#{radio_id}")
+    page.wait_for_load_state("networkidle")
+    return True
+
+
+def _es_respuesta_guardar_cita(response) -> bool:
+    """Filtro de `page.expect_response` para el ajax de guardado. BUG 2026-07-07: matchear solo
+    por URL ("ajaxAgenda.php" in r.url) es demasiado amplio -- el cambio de #filtro_profesional
+    (ver _select_doctor_filter) tambien pega a esa misma URL (devuelve la lista de profesionales) y,
+    si esa respuesta llega justo despues de entrar al `with expect_response(...)`, se captura ESA
+    en vez de la del guardado real -- se reporta fallo aunque el click a #btn_guardar_cita SI haya
+    guardado la cita.
+
+    Un primer intento filtrando por 'guardar_cita' en el post_data del REQUEST resultó poco
+    confiable en pruebas reales (falso negativo verificado: la cita SÍ se guardó según
+    get_agenda_day pero expect_response igual dio timeout). Filtrar por la FORMA de la RESPUESTA
+    en vez del request es más robusto: la respuesta de guardar_cita trae 'id_agenda' en el JSON;
+    la lista de profesionales es un array plano sin esa clave."""
+    if "ajaxAgenda.php" not in response.url or response.request.method != "POST":
+        return False
+    try:
+        data = response.json()
+    except Exception:
+        return False
+    return isinstance(data, dict) and "id_agenda" in data
+
+
 def create_appointment(
     cedula: str, patient_name: str, phone: str,
     doctor_label: str, fecha_iso: str, time: str,
@@ -280,10 +374,8 @@ def create_appointment(
     anio, mes, dia = fecha_iso[:10].split("-")
     hh, mm = _split_time_24h(time)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS)
-        page = browser.new_page()
+        page, cerrar = _open_write_page(p)
         try:
-            _login(page)
             page.goto(AGENDA_URL, wait_until="networkidle")
             inicio = f"{anio}-{mes}-{dia} {hh}:{mm}"
             page.evaluate(
@@ -323,7 +415,7 @@ def create_appointment(
             # dentidesk-prueba-agendado-2026-07-01.
             id_paciente_detectado = (page.input_value("#id_paciente") or "").strip()
             paciente_existe = bool(id_paciente_detectado and id_paciente_detectado != "0")
-            with page.expect_response(lambda r: "ajaxAgenda.php" in r.url, timeout=15000) as resp_info:
+            with page.expect_response(_es_respuesta_guardar_cita, timeout=15000) as resp_info:
                 page.click("#btn_guardar_cita")
             data = resp_info.value.json()
             # (Antes había un page.goto(AGENDA_URL, networkidle) aquí "para volver a Hoy": puro
@@ -336,18 +428,24 @@ def create_appointment(
                     "IdPaciente": data.get("id_paciente"),
                     "paciente_existe": paciente_existe}
         finally:
-            browser.close()
+            cerrar()
 
 
 def move_appointment(
     id_agenda: str, fecha_actual_iso: str, patient_name: str,
-    nueva_fecha_iso: str, nueva_hora: str, sucursal: str = "214",
+    nueva_fecha_iso: str, nueva_hora: str, sucursal: str = "214", doctor_label: str = "",
 ) -> dict:
     """ESCRITURA (UI): mueve (reagenda) una cita existente a otra fecha/hora — la API no puede.
     Bajo candado DENTIDESK_ALLOW_WRITES.
 
     fecha_actual_iso/patient_name (de buscar_cita_dentidesk) son necesarios porque el IdAgenda NO
     se muestra en pantalla — hay que navegar al día correcto y clickear la tarjeta por nombre.
+
+    `doctor_label` (de buscar_cita_dentidesk, campo "doctor") es necesario porque la vista de la
+    agenda filtra por UN doctor a la vez (ver _select_doctor_filter) — sin esto, la tarjeta del
+    paciente no aparece si el filtro quedó en otro doctor (BUG 2026-07-07, silencioso: timeout sin
+    explicar por qué). Si viene vacío (caso "general", personal fijo sin doctor asignado) se omite
+    el filtro y se confía en lo que ya esté seleccionado — igual que el comportamiento previo.
 
     Navegación de fecha vía minicalendario (_goto_calendar_date) — VERIFICADA en vivo 2026-06-28
     (el intento anterior con fullCalendar('gotoDate', ...) estaba ROTO, mandaba a 1 Enero 1970).
@@ -359,11 +457,11 @@ def move_appointment(
     anio, mes, dia = nueva_fecha_iso[:10].split("-")
     hh, mm = _split_time_24h(nueva_hora)  # exige 24h 'HH:MM'; el caller normaliza con _to_24h
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS)
-        page = browser.new_page()
+        page, cerrar = _open_write_page(p)
         try:
-            _login(page)
             page.goto(AGENDA_URL, wait_until="networkidle")
+            if doctor_label:
+                _select_doctor_filter(page, doctor_label)
             _goto_calendar_date(page, int(anio_act), int(mes_act), int(dia_act))
             page.locator(f"text={patient_name}").first.click(timeout=8000)
             page.wait_for_selector("#btn_guardar_cita", timeout=5000)
@@ -378,7 +476,7 @@ def move_appointment(
             page.select_option("#aniocita", anio)
             page.select_option("#horac", hh.zfill(2))
             page.select_option("#minutos", mm.zfill(2))
-            with page.expect_response(lambda r: "ajaxAgenda.php" in r.url, timeout=15000) as resp_info:
+            with page.expect_response(_es_respuesta_guardar_cita, timeout=15000) as resp_info:
                 page.click("#btn_guardar_cita")
             data = resp_info.value.json()
             # (goto AGENDA_URL redundante eliminado: la cita ya se movió y el navegador se cierra
@@ -387,4 +485,4 @@ def move_appointment(
                 return {"success": False, "error": "guardar_cita_fallo", "raw": data}
             return {"success": True, "IdAgenda": data.get("id_agenda")}
         finally:
-            browser.close()
+            cerrar()

@@ -12,14 +12,18 @@ COPY . .
 RUN chown -R appuser /app
 
 # --- Simulación: SOLO para el campo autorizado (DENTIDESK_ALLOW_WRITES=1). ---
-# Trae Chromium + libs del SO para Playwright (~400MB extra). NO usar en producción.
+# Trae Chrome (canal real, no el Chromium bundled) + libs del SO para Playwright (~400MB extra).
+# NO usar en producción.
 #   docker build --target sim -t odontotec-sim .
 # PLAYWRIGHT_BROWSERS_PATH fija una ruta compartida y legible para que appuser (no-root)
 # encuentre el navegador instalado como root.
+# channel="chrome": create_appointment/move_appointment lanzan con channel="chrome" (bug 2026-07-07,
+# ver dentidesk-playwright-bugs-2026-07-07) — el Chromium bundled dispara reCAPTCHA en el login real.
+# Por eso aqui se instala "chrome" (Chrome estable real), no "chromium".
 FROM base AS sim
 USER root
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN playwright install --with-deps chromium && chmod -R a+rx /ms-playwright
+RUN playwright install --with-deps chrome && chmod -R a+rx /ms-playwright
 USER appuser
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

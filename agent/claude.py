@@ -70,13 +70,14 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "reagendar_cita_dentidesk",
-            "description": "Mueve (reagenda) una cita EXISTENTE de Dentidesk a otra fecha/hora. Requiere el IdAgenda, la fecha ACTUAL y el nombre del paciente, todos obtenidos con buscar_cita_dentidesk. Usar UNA SOLA VEZ tras confirmar los nuevos datos.",
+            "description": "Mueve (reagenda) una cita EXISTENTE de Dentidesk a otra fecha/hora. Requiere el IdAgenda, la fecha ACTUAL, el nombre del paciente y el doctor, todos obtenidos con buscar_cita_dentidesk. Usar UNA SOLA VEZ tras confirmar los nuevos datos.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "id_agenda": {"type": "string", "description": "IdAgenda de la cita a mover (de buscar_cita_dentidesk)"},
                     "fecha_actual_iso": {"type": "string", "description": "Fecha ACTUAL de la cita antes de moverla, YYYY-MM-DD (de buscar_cita_dentidesk, campo 'fecha')"},
                     "patient_name": {"type": "string", "description": "Nombre completo del paciente (de buscar_cita_dentidesk), para ubicar la tarjeta en la agenda"},
+                    "doctor": {"type": "string", "description": "Doctor asignado a la cita (de buscar_cita_dentidesk, campo 'doctor'). Necesario para que la agenda muestre la tarjeta correcta; enviar siempre que buscar_cita_dentidesk lo haya devuelto."},
                     "fecha_iso": {"type": "string", "description": "Nueva fecha en formato YYYY-MM-DD"},
                     "time": {"type": "string", "description": "Nueva hora, ej: 10:00 AM"},
                     "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina"}

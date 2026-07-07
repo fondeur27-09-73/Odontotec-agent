@@ -37,7 +37,7 @@ def main():
     e = _env()
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
-            PROFILE, headless=False, slow_mo=100,
+            PROFILE, headless=False, slow_mo=100, channel="chrome",
             args=[f"--remote-debugging-port={CDP_PORT}", "--start-maximized", "--new-window"],
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
