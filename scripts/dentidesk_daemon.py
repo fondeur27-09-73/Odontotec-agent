@@ -1,14 +1,20 @@
 """
-Lanza UN navegador Dentidesk que se queda abierto indefinidamente (puerto CDP 9222), para que
-scripts/dentidesk_attach.py se conecte a el las veces que haga falta SIN volver a abrir/cerrar
-ni pedir captcha de nuevo.
+Lanza UN navegador Dentidesk que se queda abierto indefinidamente (puerto CDP 9222, SIEMPRE en
+127.0.0.1 -- CDP no tiene autenticacion, nunca debe salir de este proceso/contenedor), para que
+otros scripts (dentidesk_attach.py, dentidesk_bulk_*.py, o esta misma API en produccion) se
+conecten las veces que haga falta SIN volver a abrir/cerrar ni pedir captcha de nuevo.
 
-Uso:
+Uso local (exploracion manual):
     & ".venv\\Scripts\\Activate.ps1"
     python scripts/dentidesk_daemon.py
 
-REGLA: este navegador es para EXPLORAR (click en lo que sea: agenda, pacientes, doctores,
-intentar agendar/reagendar hasta el formulario). NUNCA pulsar Guardar / cambiar status real.
+Uso en el contenedor "daemon" de produccion: DENTIDESK_DAEMON_API=1 hace que, despues del login,
+en vez de quedarse en un loop de espera, levante tambien la API HTTP interna
+(scripts/dentidesk_daemon_api.py) para que el agente le pida crear/mover citas por red.
+
+REGLA (exploracion manual): este navegador es para EXPLORAR (click en lo que sea: agenda,
+pacientes, doctores, intentar agendar/reagendar hasta el formulario). NUNCA pulsar Guardar /
+cambiar status real fuera de los scripts de escritura ya auditados.
 """
 import os
 import sys
@@ -16,9 +22,13 @@ import time
 
 OUT = os.path.join(os.path.dirname(__file__), "_out")
 os.makedirs(OUT, exist_ok=True)
-PROFILE = os.path.join(OUT, "dd_profile")
+# DENTIDESK_PROFILE_DIR: en produccion (contenedor "daemon") apunta a un volumen persistente
+# (ej /data/dd_profile) para que el login sobreviva a un redeploy -- igual que odontotec-data
+# para el SQLite. En local usa la carpeta de siempre bajo scripts/_out.
+PROFILE = os.getenv("DENTIDESK_PROFILE_DIR", os.path.join(OUT, "dd_profile"))
 LOGIN_URL = "https://app.dentidesk.com/home.php"
 CDP_PORT = 9222
+API_PORT = int(os.getenv("DENTIDESK_DAEMON_API_PORT", "8100"))
 
 
 def _env():
@@ -63,6 +73,18 @@ def main():
                       "manualmente en la ventana.", flush=True)
         page.wait_for_load_state("networkidle")
         print(f"DAEMON LISTO. CDP en http://127.0.0.1:{CDP_PORT} | URL: {page.url}", flush=True)
+
+        if os.getenv("DENTIDESK_DAEMON_API", "").lower() in ("1", "true", "yes"):
+            # Modo produccion: sirve la API HTTP interna (scripts/dentidesk_daemon_api.py) en vez
+            # de solo esperar. Bloquea aqui (uvicorn.run) -- el navegador de arriba se queda vivo
+            # porque seguimos dentro del `with sync_playwright()`, uvicorn corre en este mismo
+            # hilo/proceso sin pisar el loop interno de Playwright (hilo aparte).
+            import uvicorn
+            print(f"Sirviendo API interna en 0.0.0.0:{API_PORT} (DENTIDESK_DAEMON_API=1).",
+                  flush=True)
+            uvicorn.run("scripts.dentidesk_daemon_api:app", host="0.0.0.0", port=API_PORT)
+            return
+
         print("Navegador se queda abierto. Usa scripts/dentidesk_attach.py <step> para explorar.",
               flush=True)
         print("Para detenerlo: Ctrl+C aqui, o cierra la ventana a mano.", flush=True)

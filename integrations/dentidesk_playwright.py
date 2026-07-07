@@ -13,8 +13,19 @@ IMPORTANTE — IMPORT PEREZOSO:
   no rompe el agente aunque Playwright no esté presente. Solo las funciones de escritura (que solo
   se usan en el campo de simulación, con un entorno que SÍ tenga Playwright) lo importan.
 
+DOS MODOS DE ESCRITURA (create_appointment/move_appointment):
+  1. `DENTIDESK_DAEMON_URL` seteado (producción real, 2 contenedores) — delega por HTTP a la API
+     interna del contenedor "daemon" (`scripts/dentidesk_daemon_api.py`), que sí tiene Playwright y
+     un navegador persistente ya logueado. Este contenedor (el del agente) NO necesita Playwright
+     ni toca CDP directo — solo hace un POST con `DENTIDESK_DAEMON_SECRET`. Modo recomendado en
+     producción.
+  2. Sin esa env — corre Playwright LOCALMENTE en este mismo proceso (necesita el navegador
+     instalado). Dentro de este modo, `DENTIDESK_CDP_URL` (mismo host/contenedor que el daemon)
+     evita relanzar+loguear; sin ninguna de las dos, lanza un navegador nuevo y loguea de cero
+     (fallback, riesgo de reCAPTCHA — ver memoria dentidesk-playwright-bugs-2026-07-07).
+
 CANDADO: toda acción de ESCRITURA exige DENTIDESK_ALLOW_WRITES=1. Sin ese env, se detiene ANTES de
-abrir el navegador. Solo en el campo de simulación autorizado se activa.
+abrir el navegador (o de llamar al daemon). Solo en el campo de simulación autorizado se activa.
 
 SELECTORES — capturados 2026-06-28 inspeccionando la app real (login, pacientes.php → ficha.php,
 agenda → editar cita, agenda → nueva cita) más el código fuente JS de home.php (funciones globales
@@ -74,7 +85,24 @@ def _login(page):
     page.wait_for_load_state("networkidle")
 
 
-CDP_URL = os.getenv("DENTIDESK_CDP_URL", "")  # ej "http://127.0.0.1:9222"
+CDP_URL = os.getenv("DENTIDESK_CDP_URL", "")  # ej "http://127.0.0.1:9222" -- mismo host/proceso
+# DENTIDESK_DAEMON_URL: en producción real (agente en un contenedor, daemon en otro), en vez de
+# CDP_URL se usa esto -- URL de la API HTTP interna del contenedor "daemon" (ver
+# scripts/dentidesk_daemon_api.py), no del navegador directo. CDP es un protocolo SIN
+# autenticación (control total del navegador logueado); exponerlo entre contenedores es
+# inseguro, así que el daemon NUNCA expone su CDP fuera de sí mismo -- solo esta API, protegida
+# por DENTIDESK_DAEMON_SECRET. Si está seteado, tiene prioridad sobre CDP_URL/login fresco.
+DAEMON_URL = os.getenv("DENTIDESK_DAEMON_URL", "").rstrip("/")
+DAEMON_SECRET = os.getenv("DENTIDESK_DAEMON_SECRET", "")
+
+
+def _call_daemon(path: str, payload: dict) -> dict:
+    """POST a la API interna del contenedor daemon (ver scripts/dentidesk_daemon_api.py)."""
+    import httpx
+    headers = {"X-Daemon-Secret": DAEMON_SECRET} if DAEMON_SECRET else {}
+    r = httpx.post(f"{DAEMON_URL}{path}", json=payload, headers=headers, timeout=30.0)
+    r.raise_for_status()
+    return r.json()
 
 
 def _open_write_page(p):
@@ -370,6 +398,13 @@ def create_appointment(
     `time` DEBE venir en 24h 'HH:MM' (el caller normaliza con _to_24h). '3:00 PM' crudo aquí
     seleccionaría las 03:00 de la madrugada — por eso se valida y se rechaza."""
     _require_writes_enabled()
+    if DAEMON_URL:
+        # Modo producción (2 contenedores): delega al daemon por HTTP, sin tocar Playwright aquí.
+        return _call_daemon("/crear_cita", {
+            "cedula": cedula, "patient_name": patient_name, "phone": phone,
+            "doctor_label": doctor_label, "fecha_iso": fecha_iso, "time": time,
+            "procedimiento": procedimiento, "sucursal": sucursal,
+        })
     from playwright.sync_api import sync_playwright  # import perezoso (ver cabecera)
     anio, mes, dia = fecha_iso[:10].split("-")
     hh, mm = _split_time_24h(time)
@@ -452,6 +487,13 @@ def move_appointment(
     El click por texto del paciente SÍ está verificado (2 veces, en Semana y Día, sobre citas
     reales)."""
     _require_writes_enabled()
+    if DAEMON_URL:
+        # Modo producción (2 contenedores): delega al daemon por HTTP, sin tocar Playwright aquí.
+        return _call_daemon("/mover_cita", {
+            "id_agenda": id_agenda, "fecha_actual_iso": fecha_actual_iso,
+            "patient_name": patient_name, "nueva_fecha_iso": nueva_fecha_iso,
+            "nueva_hora": nueva_hora, "sucursal": sucursal, "doctor_label": doctor_label,
+        })
     from playwright.sync_api import sync_playwright  # import perezoso
     anio_act, mes_act, dia_act = fecha_actual_iso[:10].split("-")
     anio, mes, dia = nueva_fecha_iso[:10].split("-")
