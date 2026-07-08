@@ -85,23 +85,28 @@ def main():
         print(f"DAEMON LISTO. CDP en http://127.0.0.1:{CDP_PORT} | URL: {page.url}", flush=True)
 
         if os.getenv("DENTIDESK_DAEMON_API", "").lower() in ("1", "true", "yes"):
-            # Modo produccion: sirve la API HTTP interna (scripts/dentidesk_daemon_api.py) en vez
-            # de solo esperar. Bloquea aqui (uvicorn.run) -- el navegador de arriba se queda vivo
-            # porque seguimos dentro del `with sync_playwright()`, uvicorn corre en este mismo
-            # hilo/proceso sin pisar el loop interno de Playwright (hilo aparte).
-            import uvicorn
-            # uvicorn.run con string de import ("scripts.dentidesk_daemon_api:app") resuelve el
-            # modulo via sys.path -- pero al correr este script como `python scripts/dentidesk_daemon.py`
-            # sys.path[0] queda en /app/scripts, NO en /app, asi que "scripts" como paquete de
-            # nivel superior no se encuentra (ModuleNotFoundError). Sin este fix, esa excepcion
-            # no capturada tumbaba el daemon justo despues del login (proceso muere -> contenedor
-            # reinicia -> se pierde la sesion, pareciendo un loop infinito de login).
+            # Modo produccion: sirve la API HTTP interna (scripts/dentidesk_daemon_api.py) en un
+            # PROCESO APARTE (no uvicorn.run() en este mismo hilo/proceso). uvicorn.run() hace su
+            # propio asyncio.run(), y sync_playwright ya deja este hilo con un event loop tocado
+            # -- eso producia "RuntimeWarning: coroutine 'Server.serve' was never awaited" y el
+            # proceso completo moria justo despues del login (contenedor reiniciaba en loop,
+            # perdiendo la sesion recien logueada). Un subprocess corre en su propio interprete,
+            # sin ese conflicto -- igual a como se probo manualmente con exito (uvicorn suelto).
+            import subprocess
             app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            if app_root not in sys.path:
-                sys.path.insert(0, app_root)
             print(f"Sirviendo API interna en 0.0.0.0:{API_PORT} (DENTIDESK_DAEMON_API=1).",
                   flush=True)
-            uvicorn.run("scripts.dentidesk_daemon_api:app", host="0.0.0.0", port=API_PORT)
+            subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", "scripts.dentidesk_daemon_api:app",
+                 "--host", "0.0.0.0", "--port", str(API_PORT)],
+                cwd=app_root,
+            )
+            print("Navegador se queda abierto (API en subproceso aparte).", flush=True)
+            try:
+                while True:
+                    time.sleep(5)
+            except KeyboardInterrupt:
+                print("Cerrando daemon (Ctrl+C).", flush=True)
             return
 
         print("Navegador se queda abierto. Usa scripts/dentidesk_attach.py <step> para explorar.",
