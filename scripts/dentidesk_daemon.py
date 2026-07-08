@@ -32,12 +32,15 @@ API_PORT = int(os.getenv("DENTIDESK_DAEMON_API_PORT", "8100"))
 
 
 def _env():
-    e = {}
+    # En produccion (contenedor "daemon") EasyPanel inyecta las env vars directo al proceso, sin
+    # archivo .env -- solo local (exploracion manual) tiene ese archivo. os.environ ya trae ambos casos.
+    e = dict(os.environ)
     p = os.path.join(os.path.dirname(__file__), "..", ".env")
-    for line in open(p, encoding="utf-8"):
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, _, v = line.partition("="); e[k.strip()] = v.strip()
+    if os.path.exists(p):
+        for line in open(p, encoding="utf-8"):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("="); e[k.strip()] = v.strip()
     return e
 
 
