@@ -1,0 +1,28 @@
+# Copia de la etapa "daemon" del Dockerfile principal, como archivo standalone: EasyPanel
+# (build "Dockerfile" en su UI) no soporta `docker build --target`, solo "docker build" liso, que
+# construye siempre la ÚLTIMA etapa del archivo. El Dockerfile principal termina en "prod" (para
+# el servicio "odontotec"), así que este archivo aparte -- solo base+daemon, terminando en daemon --
+# es lo que apunta el servicio "dentidesk-daemon" en EasyPanel (Source > Build > File = Dockerfile.daemon).
+# Mantener en sync manual con el stage "daemon" de ./Dockerfile si cambia.
+
+FROM python:3.11-slim AS base
+WORKDIR /app
+RUN adduser --disabled-password --gecos "" appuser
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+RUN chown -R appuser /app
+
+FROM base AS daemon
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      xvfb x11vnc novnc websockify \
+    && rm -rf /var/lib/apt/lists/*
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN playwright install --with-deps chrome && chmod -R a+rx /ms-playwright
+RUN chmod +x scripts/daemon_entrypoint.sh
+USER appuser
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# 9222 (CDP) NO se publica -- solo 6080 (VNC web, temporal, con contraseña) y 8100 (API interna).
+EXPOSE 6080 8100
+CMD ["scripts/daemon_entrypoint.sh"]
