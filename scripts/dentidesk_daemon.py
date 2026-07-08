@@ -74,7 +74,14 @@ def main():
             except Exception:
                 print("No se detecto login (timeout). Daemon sigue corriendo igual; reintenta "
                       "manualmente en la ventana.", flush=True)
-        page.wait_for_load_state("networkidle")
+        try:
+            # La Agenda de Dentidesk mantiene trafico de red constante (polling/websockets) que
+            # rara vez llega a "networkidle" -- sin este try/except, el timeout tumbaba TODO el
+            # daemon (excepcion no capturada -> proceso muere -> contenedor reinicia -> se pierde
+            # la sesion recien logueada, pareciendo que "vuelve al login" en un loop infinito).
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            pass
         print(f"DAEMON LISTO. CDP en http://127.0.0.1:{CDP_PORT} | URL: {page.url}", flush=True)
 
         if os.getenv("DENTIDESK_DAEMON_API", "").lower() in ("1", "true", "yes"):
