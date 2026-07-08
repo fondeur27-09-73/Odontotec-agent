@@ -90,6 +90,15 @@ def main():
             # porque seguimos dentro del `with sync_playwright()`, uvicorn corre en este mismo
             # hilo/proceso sin pisar el loop interno de Playwright (hilo aparte).
             import uvicorn
+            # uvicorn.run con string de import ("scripts.dentidesk_daemon_api:app") resuelve el
+            # modulo via sys.path -- pero al correr este script como `python scripts/dentidesk_daemon.py`
+            # sys.path[0] queda en /app/scripts, NO en /app, asi que "scripts" como paquete de
+            # nivel superior no se encuentra (ModuleNotFoundError). Sin este fix, esa excepcion
+            # no capturada tumbaba el daemon justo despues del login (proceso muere -> contenedor
+            # reinicia -> se pierde la sesion, pareciendo un loop infinito de login).
+            app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if app_root not in sys.path:
+                sys.path.insert(0, app_root)
             print(f"Sirviendo API interna en 0.0.0.0:{API_PORT} (DENTIDESK_DAEMON_API=1).",
                   flush=True)
             uvicorn.run("scripts.dentidesk_daemon_api:app", host="0.0.0.0", port=API_PORT)
