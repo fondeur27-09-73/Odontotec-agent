@@ -182,8 +182,8 @@ def _norm_doc(doc: str) -> str:
 
 
 def _norm_phone(phone: str) -> str:
-    digits = "".join(c for c in str(phone) if c.isdigit())
-    return digits[-10:] if len(digits) >= 10 else digits  # comparar por últimos 10 dígitos
+    # ponytail: store ALL digits, not just last 10 (last 10 loses country code, +1 for USA)
+    return "".join(c for c in str(phone) if c.isdigit())
 
 
 # ---------------------------------------------------------------------------
