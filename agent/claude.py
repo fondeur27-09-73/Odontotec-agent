@@ -10,6 +10,15 @@ logger = logging.getLogger("odontotec.agent")
 MAX_ITERATIONS = 10
 _client = None
 
+# Tools de agenda real (lectura/escritura Dentidesk). Un intento de cualquiera de estas HABILITA
+# el escalado legítimo (GUION F tras un fallo real). Ver guardrail en run_agent.
+_SCHEDULING_TOOLS = {
+    "buscar_cita_dentidesk",
+    "agendar_cita_dentidesk",
+    "reagendar_cita_dentidesk",
+    "confirmar_cita_dentidesk",
+}
+
 # OpenAI tool schemas (same logic as Anthropic but different format)
 # MODO PRUEBA: las herramientas de reserva (Cal.com) y correo fueron retiradas a
 # propósito. El agente NO registra citas en ningún sistema externo hasta que
@@ -181,6 +190,17 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
         )
     logger.info(f"run_agent using model={model!r}")
 
+    # GUARDRAIL (bug 2026-07-08): con el modelo actual (gpt-5.5), ante una petición de reagendar/
+    # agendar —sobre todo si el paciente cambia también el tipo de tratamiento— el modelo llamaba
+    # escalate_to_human como PRIMERA acción, sin intentar siquiera buscar_cita_dentidesk/
+    # agendar_cita_dentidesk. Reforzar el prompt NO lo corrigió (2 intentos). Este guardrail de
+    # código bloquea UNA VEZ el escalado prematuro (cuando no hubo ningún intento previo de tocar la
+    # agenda en este turno) y devuelve un tool-result correctivo que obliga a llamar la tool correcta.
+    # Se permite después: respeta el escalado legítimo (paciente pide humano / molesto / fallo real
+    # de una tool → GUION F) y evita bucles.
+    scheduling_attempted = False
+    escalate_nudged = False
+
     for _ in range(MAX_ITERATIONS):
         response = _get_client().chat.completions.create(
             model=model,
@@ -195,13 +215,43 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
         if msg.tool_calls:
             messages.append(msg)
             for tc in msg.tool_calls:
+                name = tc.function.name
+                # Escalado prematuro: sin intento previo de agenda en este turno y aún no nudged.
+                # No se ejecuta escalate_to_human; se responde el tool_call con una corrección para
+                # que el modelo intente primero la tool correcta. (Todo tool_call DEBE recibir un
+                # tool-result o la API rechaza el siguiente request, por eso se responde aquí igual.)
+                if name == "escalate_to_human" and not scheduling_attempted and not escalate_nudged:
+                    escalate_nudged = True
+                    logger.info(
+                        f"run_agent conv={conversation_id}: escalate_to_human bloqueado (nudge) "
+                        f"— sin intento previo de agenda en este turno"
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps({
+                            "error": "escalado_no_permitido_aun",
+                            "message": (
+                                "No escales todavía. Si el paciente quiere agendar, reagendar o "
+                                "cambiar el tratamiento/procedimiento de una cita, primero llama "
+                                "buscar_cita_dentidesk (para reagendar, y obtener el IdAgenda) o "
+                                "agendar_cita_dentidesk (cita nueva). Un cambio de tratamiento NO es "
+                                "motivo de escalar. Solo escala si el paciente pidió explícitamente "
+                                "hablar con una persona, está molesto, o una de esas herramientas ya "
+                                "devolvió un error real."
+                            ),
+                        }, ensure_ascii=False),
+                    })
+                    continue
                 # args malformados del modelo no deben tumbar el turno entero (el paciente se
                 # quedaba sin respuesta): se devuelven como error de tool y el modelo corrige.
                 try:
                     args = json.loads(tc.function.arguments)
-                    result = handle_tool(tc.function.name, args)
+                    result = handle_tool(name, args)
                 except (json.JSONDecodeError, TypeError) as e:
                     result = json.dumps({"error": f"argumentos inválidos: {e}"})
+                if name in _SCHEDULING_TOOLS:
+                    scheduling_attempted = True
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,

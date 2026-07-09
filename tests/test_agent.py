@@ -79,3 +79,46 @@ def test_save_patient_tool_schema_includes_cedula():
     from agent.claude import OPENAI_TOOLS
     save_patient_tool = next(t for t in OPENAI_TOOLS if t["function"]["name"] == "save_patient")
     assert "cedula" in save_patient_tool["function"]["parameters"]["properties"]
+
+
+def test_escalate_prematuro_se_bloquea_y_reintenta_agenda():
+    # Bug 2026-07-08: ante reagendar el modelo llamaba escalate_to_human de una, sin tocar la
+    # agenda. El guardrail lo bloquea UNA vez (sin ejecutar handle_tool) y lo empuja a intentar
+    # buscar_cita_dentidesk; recién entonces se ejecuta una tool real.
+    with patch("agent.claude._get_client") as mock_fn, \
+         patch("agent.claude.handle_tool",
+               return_value=json.dumps({"found": True, "IdAgenda": "999"})) as mock_tool:
+        mock_fn.return_value.chat.completions.create.side_effect = [
+            _tool_response("escalate_to_human", {"reason": "otro", "conversation_id": 1}),
+            _tool_response("buscar_cita_dentidesk", {"fecha_iso": "2026-07-11"}),
+            _text_response("Le confirmo su cita reprogramada."),
+        ]
+        from agent.claude import run_agent
+        result = run_agent([{"role": "user", "content": "cambia mi cita"}], 1)
+        # escalate_to_human NUNCA se ejecutó; la única tool ejecutada fue la de agenda.
+        assert mock_tool.call_count == 1
+        assert mock_tool.call_args.args[0] == "buscar_cita_dentidesk"
+        assert "confirmo" in result.lower()
+
+
+def test_escalate_permitido_tras_intento_real_de_agenda():
+    # Si YA hubo un intento de agenda (aquí falló), el escalado legítimo (GUION F) SÍ se ejecuta.
+    with patch("agent.claude._get_client") as mock_fn, \
+         patch("agent.claude.handle_tool") as mock_tool:
+        mock_tool.side_effect = [
+            json.dumps({"success": False, "error": "guardar_cita_fallo"}),
+            json.dumps({"success": True, "escalated": True}),
+        ]
+        mock_fn.return_value.chat.completions.create.side_effect = [
+            _tool_response("reagendar_cita_dentidesk",
+                           {"id_agenda": "1", "fecha_actual_iso": "2026-07-10",
+                            "patient_name": "Ulises", "fecha_iso": "2026-07-11", "time": "11:30"}),
+            _tool_response("escalate_to_human", {"reason": "otro", "conversation_id": 1}),
+            _text_response("Una compañera le confirmará su cita en unos minutos."),
+        ]
+        from agent.claude import run_agent
+        result = run_agent([{"role": "user", "content": "cambia mi cita"}], 1)
+        # Ambas tools se ejecutaron: el intento real y, tras el fallo, el escalado.
+        assert mock_tool.call_count == 2
+        assert mock_tool.call_args_list[1].args[0] == "escalate_to_human"
+        assert "compañera" in result

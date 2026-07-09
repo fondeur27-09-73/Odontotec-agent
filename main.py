@@ -1,4 +1,5 @@
 import os
+import re
 import hmac
 import asyncio
 import logging
@@ -24,8 +25,42 @@ def _conv_lock(conv_id: int) -> asyncio.Lock:
         lock = _conv_locks.setdefault(conv_id, asyncio.Lock())
     return lock
 
+def _git_commit() -> str:
+    """Commit desplegado, sin depender del binario `git` (python:3.11-slim no lo trae). Prioriza
+    la env GIT_COMMIT (inyectable por el build) y si no, lee .git/HEAD a mano. 'desconocido' si nada."""
+    env = os.getenv("GIT_COMMIT", "").strip()
+    if env:
+        return env[:12]
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        head = open(os.path.join(here, ".git", "HEAD")).read().strip()
+        if head.startswith("ref:"):
+            ref = head.split(" ", 1)[1].strip()
+            return open(os.path.join(here, ".git", ref)).read().strip()[:12]
+        return head[:12]
+    except Exception:
+        return "desconocido"
+
+
+def _log_startup_diagnostics():
+    """Deja en logs, al arrancar, QUÉ código corre y si el cableado de escritura a Dentidesk está
+    presente. Sin esto, verificar "¿está desplegado el fix?" y "¿puede escribir la agenda?" costaba
+    navegar la UI de EasyPanel a ciegas (handoff 2026-07-08). MISSING en cualquiera de las tres de
+    Dentidesk = ningún agendado/reagendado podrá escribir (candado o falta de daemon)."""
+    def _present(name: str) -> str:
+        return "SET" if os.getenv(name) else "MISSING"
+    logger.info(
+        "startup: commit=%s model=%s DENTIDESK_ALLOW_WRITES=%s DENTIDESK_DAEMON_URL=%s "
+        "DENTIDESK_DAEMON_SECRET=%s WEBHOOK_SECRET=%s",
+        _git_commit(), os.getenv("OPENAI_MODEL", "gpt-4o"),
+        _present("DENTIDESK_ALLOW_WRITES"), _present("DENTIDESK_DAEMON_URL"),
+        _present("DENTIDESK_DAEMON_SECRET"), _present("WEBHOOK_SECRET"),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app):
+    _log_startup_diagnostics()
     # init_db aquí y no como efecto secundario de importar agent.tool_handlers: si /data no es
     # escribible, que falle el arranque con error claro, no el primer import.
     from integrations import db
@@ -103,16 +138,31 @@ def _norm_txt(s: str) -> str:
     return s.lower().strip()
 
 
+_BUTTON_KEYWORDS = {
+    "confirmar": "CONFIRMAR",
+    "cancelar": "CANCELAR",
+    "reagendar": "REAGENDAR",
+    "reprogramar": "REAGENDAR",
+}
+
+
 def _button_action(content: str) -> str | None:
-    """Detecta la respuesta de botón de la plantilla de confirmación. El texto entrante puede
-    traer emoji/acentos ('✅ Confirmar', 'Reagendar'); se normaliza y se busca la palabra clave."""
-    t = _norm_txt(content)
-    if "confirmar" in t:
-        return "CONFIRMAR"
-    if "cancelar" in t:
-        return "CANCELAR"
-    if "reagendar" in t or "reprogramar" in t:
-        return "REAGENDAR"
+    """Detecta la respuesta de BOTÓN de la plantilla de confirmación. Los botones mandan texto
+    corto y determinista ('Confirmar', '✅ Confirmar', 'Reagendar cita'); se normaliza (sin emoji/
+    acentos/puntuación) y se busca la palabra clave como PALABRA COMPLETA.
+
+    NO debe dispararse con frases conversacionales ('sí, quiero confirmar mi cita para el martes'):
+    esas van al agente. Por eso se exige que el mensaje sea corto (respuesta de botón, ≤3 palabras)
+    y que la palabra clave sea una palabra entera — un substring incrustado ('conRfirmado') no
+    cuenta, y una confirmación normal de PASO 5 no se secuestra al handler de recordatorios (bug
+    2026-07-08: caía en _handle_button, no hallaba cita en la DB de recordatorios y abortaba)."""
+    words = re.findall(r"[a-z]+", _norm_txt(content))
+    if not words or len(words) > 3:
+        return None
+    for w in words:
+        action = _BUTTON_KEYWORDS.get(w)
+        if action:
+            return action
     return None
 
 
