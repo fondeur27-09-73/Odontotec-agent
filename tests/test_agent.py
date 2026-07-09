@@ -137,24 +137,29 @@ def test_escalate_permitido_si_paciente_pide_humano_explicito():
         assert mock_tool.call_args.args[0] == "escalate_to_human"
 
 
-def test_escalate_permitido_tras_intento_real_de_agenda():
-    # Si YA hubo un intento de agenda (aquí falló), el escalado legítimo (GUION F) SÍ se ejecuta.
+def test_escalate_bloqueado_tras_fallo_de_escritura_sin_pedido_humano():
+    # DECISIÓN CLIENTE 2026-07-09: un FALLO de escritura (ej. 502 del daemon) YA NO habilita escalar.
+    # Carla debe INSISTIR (reintentar), no poner bot-off. El escalate tras el fallo se bloquea.
     with patch("agent.claude._get_client") as mock_fn, \
          patch("agent.claude.handle_tool") as mock_tool:
         mock_tool.side_effect = [
-            json.dumps({"success": False, "error": "guardar_cita_fallo"}),
-            json.dumps({"success": True, "escalated": True}),
+            json.dumps({"success": False, "error": "guardar_cita_fallo"}),  # reagendar falla
+            json.dumps({"success": True, "IdAgenda": "999"}),                # reintento OK
         ]
         mock_fn.return_value.chat.completions.create.side_effect = [
             _tool_response("reagendar_cita_dentidesk",
                            {"id_agenda": "1", "fecha_actual_iso": "2026-07-10",
                             "patient_name": "Ulises", "fecha_iso": "2026-07-11", "time": "11:30"}),
-            _tool_response("escalate_to_human", {"reason": "otro", "conversation_id": 1}),
-            _text_response("Una compañera le confirmará su cita en unos minutos."),
+            _tool_response("escalate_to_human", {"reason": "otro", "conversation_id": 1}),  # BLOQUEADO
+            _tool_response("reagendar_cita_dentidesk",
+                           {"id_agenda": "1", "fecha_actual_iso": "2026-07-10",
+                            "patient_name": "Ulises", "fecha_iso": "2026-07-11", "time": "11:30"}),
+            _text_response("Le confirmo su cita reprogramada."),
         ]
         from agent.claude import run_agent
         result = run_agent([{"role": "user", "content": "cambia mi cita"}], 1)
-        # Ambas tools se ejecutaron: el intento real y, tras el fallo, el escalado.
+        # escalate NUNCA se ejecutó; solo las dos llamadas a reagendar (fallo + reintento).
         assert mock_tool.call_count == 2
-        assert mock_tool.call_args_list[1].args[0] == "escalate_to_human"
-        assert "compañera" in result
+        assert [c.args[0] for c in mock_tool.call_args_list] == [
+            "reagendar_cita_dentidesk", "reagendar_cita_dentidesk"]
+        assert "confirmo" in result.lower()

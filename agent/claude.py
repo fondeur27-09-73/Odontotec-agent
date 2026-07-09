@@ -10,22 +10,16 @@ logger = logging.getLogger("odontotec.agent")
 MAX_ITERATIONS = 10
 _client = None
 
-# Tools de ESCRITURA a la agenda real (Dentidesk). Solo un FALLO de una de estas (o del paciente
-# pidiendo humano / queja) habilita escalate_to_human — ver guardrail en run_agent. La lectura
-# (buscar_cita_dentidesk) NO habilita escalar: un found=false significa "pregunta la fecha al
-# paciente / reintenta", no "transfiere a un humano".
-_WRITE_TOOLS = {
-    "agendar_cita_dentidesk",
-    "reagendar_cita_dentidesk",
-    "confirmar_cita_dentidesk",
-}
-
-# Frases con las que el paciente pide EXPLÍCITAMENTE un humano (única vía, junto a queja / fallo
-# real, para que escalate_to_human se ejecute sin que antes haya un intento de agenda que falló).
+# DECISIÓN DEL CLIENTE 2026-07-09: escalate_to_human (que pone bot-off y silencia a Carla) SOLO se
+# ejecuta si el paciente pide EXPLÍCITAMENTE hablar con una persona real. Un fallo técnico, un
+# found=false o un mensaje ambiguo (ej. "Wasapp") NO habilitan escalar — Carla debe INSISTIR en
+# cerrar la cita (reintentar agendar/reagendar), nunca poner bot-off por un tropiezo. Ver guardrail
+# en run_agent.
 _HUMAN_REQUEST_HINTS = (
     "una persona", "con alguien", "un humano", "una humana", "persona real", "ser humano",
     "hablar con alguien", "operador", "operadora", "recepcionista", "un agente humano",
     "gerente", "encargad", "quiero hablar con", "necesito hablar con", "comunicarme con un",
+    "atienda una persona", "que me llame", "hablar con la clinica", "hablar con un doctor",
 )
 
 
@@ -37,27 +31,6 @@ def _norm_es(text: str) -> str:
 def _wants_human(text: str) -> bool:
     t = _norm_es(text)
     return any(h in t for h in _HUMAN_REQUEST_HINTS)
-
-
-def _tool_reason(tc) -> str:
-    import json
-    try:
-        return (json.loads(tc.function.arguments) or {}).get("reason", "")
-    except Exception:
-        return ""
-
-
-def _is_write_failure(name: str, result: str) -> bool:
-    """True si una tool de ESCRITURA devolvió un error real (success=false / 'error' / basura).
-    Eso —y solo eso— es el disparador legítimo de GUION F + escalado."""
-    import json
-    if name not in _WRITE_TOOLS:
-        return False
-    try:
-        parsed = json.loads(result)
-    except Exception:
-        return True  # respuesta inparseable de una escritura = tratarla como fallo
-    return isinstance(parsed, dict) and (parsed.get("success") is False or "error" in parsed)
 
 # OpenAI tool schemas (same logic as Anthropic but different format)
 # MODO PRUEBA: las herramientas de reserva (Cal.com) y correo fueron retiradas a
@@ -190,7 +163,7 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "escalate_to_human",
-            "description": "Transfiere la conversación a un humano. Usar solo si el paciente lo pide explícitamente o está molesto.",
+            "description": "Transfiere la conversación a un humano (pone la conversación en modo humano y Carla deja de responder). Usar ÚNICAMENTE si el paciente pide EXPLÍCITAMENTE hablar con una persona real. NUNCA por fallos técnicos, errores al registrar, falta de datos, ni mensajes ambiguos: en esos casos NO se escala, se insiste en cerrar la cita.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -249,19 +222,17 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
         )
     logger.info(f"run_agent using model={model!r}")
 
-    # GUARDRAIL (bug 2026-07-08): con gpt-5.5, ante reagendar/agendar —incluso solo cambiando la
-    # FECHA, o cambiando el tratamiento— el modelo llamaba escalate_to_human como escape, sin
-    # intentar siquiera buscar_cita_dentidesk/agendar/reagendar (o sin pedir al paciente la fecha de
-    # su cita actual). Reforzar el prompt NO lo corrigió (2 intentos). Aquí se bloquea el escalado
-    # PERSISTENTEMENTE (no solo una vez): escalate_to_human solo se ejecuta si ya hubo un FALLO real
-    # de una escritura (GUION F legítimo), el paciente pidió humano explícitamente, o marcó queja.
-    # Mientras no, cada intento de escalar se responde con una corrección y el modelo debe seguir el
-    # flujo (buscar / agendar / o preguntar la fecha). Si insiste 10 iteraciones, cae al mensaje
-    # neutro de abajo (nunca transfiere ni confirma en falso). La lectura found=false NO habilita.
+    # GUARDRAIL (bugs 2026-07-08/09): gpt-5.5 llamaba escalate_to_human como escape ante
+    # reagendar/agendar, o ante un fallo técnico (ej. 502 del daemon), o ante un mensaje ambiguo
+    # (ej. "Wasapp") — poniendo bot-off y silenciando a Carla sin registrar la cita. Reforzar el
+    # prompt no bastó. DECISIÓN DEL CLIENTE 2026-07-09: escalate_to_human SOLO se ejecuta si el
+    # paciente pide EXPLÍCITAMENTE hablar con una persona real. En cualquier otro caso (fallo
+    # técnico, found=false, mensaje raro) NO se escala: se bloquea PERSISTENTEMENTE y se devuelve una
+    # corrección para que Carla INSISTA en cerrar la cita (reintentar). Si insiste 10 iteraciones,
+    # cae al mensaje neutro de abajo — que NO es bot-off ni confirmación en falso.
     last_user = next((m.get("content") or "" for m in reversed(history)
                       if m.get("role") == "user"), "")
     patient_wants_human = _wants_human(last_user)
-    write_failed = False
 
     for _ in range(MAX_ITERATIONS):
         response = _get_client().chat.completions.create(
@@ -278,16 +249,13 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
             messages.append(msg)
             for tc in msg.tool_calls:
                 name = tc.function.name
-                # Escalado prematuro: NO se ejecuta escalate_to_human salvo señal legítima. Se
-                # responde el tool_call con una corrección (todo tool_call DEBE recibir un tool-result
-                # o la API rechaza el siguiente request), y el modelo reintenta el flujo correcto.
-                escalado_legitimo = (
-                    write_failed or patient_wants_human or _tool_reason(tc) == "queja"
-                )
-                if name == "escalate_to_human" and not escalado_legitimo:
+                # Escalado permitido SOLO si el paciente pidió humano explícitamente. Si no, no se
+                # ejecuta: se responde el tool_call con una corrección (todo tool_call DEBE recibir un
+                # tool-result o la API rechaza el siguiente request) y el modelo insiste en la cita.
+                if name == "escalate_to_human" and not patient_wants_human:
                     logger.info(
                         f"run_agent conv={conversation_id}: escalate_to_human BLOQUEADO "
-                        f"(escalado prematuro, sin fallo de escritura ni pedido de humano)"
+                        f"(el paciente no pidió un humano explícitamente — Carla debe insistir)"
                     )
                     messages.append({
                         "role": "tool",
@@ -295,14 +263,15 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
                         "content": json.dumps({
                             "error": "escalado_no_permitido",
                             "message": (
-                                "NO escales. El paciente quiere agendar/reagendar/cambiar una cita, "
-                                "y eso NO se transfiere a un humano. Sigue el flujo: para reagendar, "
-                                "llama buscar_cita_dentidesk con la fecha de la cita ACTUAL para "
-                                "obtener el IdAgenda; si no sabes esa fecha, PREGÚNTASELA al paciente "
-                                "con cortesía (no escales por no tenerla). Para una cita nueva, llama "
-                                "agendar_cita_dentidesk. Un cambio de tratamiento es una reagenda "
-                                "normal. Solo puedes escalar si el paciente pide explícitamente "
-                                "hablar con una persona, o si una escritura ya devolvió un error real."
+                                "NO escales y NO pongas bot-off. El paciente NO pidió hablar con una "
+                                "persona. Ante cualquier tropiezo (un error al registrar, un mensaje "
+                                "confuso, o no saber un dato) NO se transfiere a un humano: INSISTE en "
+                                "cerrar la cita. Si agendar/reagendar falló, discúlpate en una línea y "
+                                "vuelve a intentarlo (reconfirma los datos y llama la tool otra vez). "
+                                "Si falta un dato, pídelo. Si el mensaje del paciente no requiere "
+                                "acción (ej. 'ok', 'gracias', 'whatsapp'), responde con cortesía y "
+                                "cierra. Solo se escala si el paciente dice EXPLÍCITAMENTE que quiere "
+                                "hablar con una persona real."
                             ),
                         }, ensure_ascii=False),
                     })
@@ -314,13 +283,10 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
                     result = handle_tool(name, args)
                 except (json.JSONDecodeError, TypeError) as e:
                     result = json.dumps({"error": f"argumentos inválidos: {e}"})
-                result = str(result)
-                if _is_write_failure(name, result):
-                    write_failed = True
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": result
+                    "content": str(result)
                 })
         else:
             return msg.content or ""
