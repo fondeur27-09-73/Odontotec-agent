@@ -18,6 +18,8 @@ REGLAS:
 import os
 import json
 import httpx
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 
 _BASE = os.getenv("DENTIDESK_BASE", "https://app.dentidesk.com/api").rstrip("/")
 _TIMEOUT = 20
@@ -111,6 +113,66 @@ def find_by_phone(phone: str, date_iso: str, location: str | None = None) -> dic
         for field in ("Phone", "Phone2"):
             if _norm_phone(cita.get(field, "")) == target:
                 return cita
+    return None
+
+
+def _today_clinic():
+    """Fecha de hoy en la zona horaria de la clínica (para escanear la agenda hacia adelante)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(os.getenv("TIMEZONE", "America/Santo_Domingo"))).date()
+    except Exception:
+        return datetime.now().date()
+
+
+def _cita_matches(cita: dict, target_doc: str, target_phone: str) -> bool:
+    if target_doc and _norm_doc(cita.get("PatientDocument", "")) == target_doc:
+        return True
+    if target_phone:
+        for field in ("Phone", "Phone2"):
+            if _norm_phone(cita.get(field, "")) == target_phone:
+                return True
+    return False
+
+
+def find_upcoming(cedula: str = "", phone: str = "", start_iso: str | None = None,
+                  days: int = 30, location: str | None = None,
+                  max_workers: int = 6) -> dict | None:
+    """Busca la PRÓXIMA cita del paciente en una ventana de días, por cédula o teléfono, SIN que el
+    paciente tenga que recordar la fecha exacta. getAgendaDay solo lee la agenda de UN día y no hay
+    endpoint de búsqueda por paciente, así que se escanea día por día (en paralelo) desde start_iso
+    (o desde hoy) hacia adelante, saltando domingos (clínica cerrada). Devuelve la cita de fecha más
+    temprana que matchee, o None. `days` se acota a [1, 60] para no disparar una tormenta de logins."""
+    loc = location or DEFAULT_LOCATION
+    target_doc = _norm_doc(cedula) if cedula else ""
+    target_phone = _norm_phone(phone) if phone else ""
+    if not target_doc and not target_phone:
+        return None
+    if start_iso:
+        try:
+            start = datetime.strptime(start_iso[:10], "%Y-%m-%d").date()
+        except Exception:
+            start = _today_clinic()
+    else:
+        start = _today_clinic()
+    days = max(1, min(int(days), 60))
+    fechas = [d.isoformat() for i in range(days)
+              if (d := start + timedelta(days=i)).weekday() != 6]  # 6 = domingo
+
+    def _match_day(date_iso: str):
+        try:
+            for cita in get_agenda_day(date_iso, loc):
+                if _cita_matches(cita, target_doc, target_phone):
+                    return (date_iso, cita)
+        except Exception:
+            return None
+        return None
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        # ex.map preserva el orden de `fechas` (ascendente): la primera coincidencia = la más temprana.
+        for res in ex.map(_match_day, fechas):
+            if res:
+                return res[1]
     return None
 
 

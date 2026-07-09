@@ -192,3 +192,56 @@ def test_agendar_fuera_de_horario_gana_antes_que_hora_invalida():
     assert result["success"] is False
     assert result["error"] == "fuera_de_horario"
     mock_pw.assert_not_called()
+
+
+# --- buscar_cita_proxima_dentidesk: encontrar la cita sin conocer la fecha ---
+
+def test_find_upcoming_encuentra_la_mas_temprana_por_telefono():
+    from integrations import dentidesk
+    # Agenda simulada por día: la cita del paciente está a 3 días.
+    agenda = {
+        "2026-07-08": [{"PatientName": "Otro", "Phone": "8090000000"}],
+        "2026-07-09": [],
+        "2026-07-11": [{"IdAgenda": "555", "PatientName": "Analeidy López",
+                        "Phone": "18097873496", "Date": "2026-07-11", "time": "14:30"}],
+    }
+    with patch("integrations.dentidesk._today_clinic",
+               return_value=__import__("datetime").date(2026, 7, 8)), \
+         patch("integrations.dentidesk.get_agenda_day",
+               side_effect=lambda d, loc=None: agenda.get(d, [])):
+        cita = dentidesk.find_upcoming(phone="+1 809-787-3496", days=10)
+    assert cita is not None
+    assert cita["IdAgenda"] == "555"
+
+
+def test_find_upcoming_salta_domingos_y_no_encuentra():
+    from integrations import dentidesk
+    called = []
+    def _fake_day(d, loc=None):
+        called.append(d)
+        return []
+    with patch("integrations.dentidesk._today_clinic",
+               return_value=__import__("datetime").date(2026, 7, 8)), \
+         patch("integrations.dentidesk.get_agenda_day", side_effect=_fake_day):
+        cita = dentidesk.find_upcoming(cedula="031-0277909-1", days=7)
+    assert cita is None
+    assert "2026-07-12" not in called  # 2026-07-12 = domingo, no se consulta
+
+
+def test_buscar_cita_proxima_handler_normaliza_shape():
+    with patch("agent.tool_handlers.dentidesk.find_upcoming",
+               return_value={"IdAgenda": "777", "PatientName": "Ulises Ramírez",
+                             "Date": "2026-07-21", "time": "14:30",
+                             "ProfessionalName": "Adriana Abreu"}):
+        result = json.loads(handle_tool("buscar_cita_proxima_dentidesk",
+                                        {"telefono": "+18099790205"}))
+    assert result["found"] is True
+    assert result["IdAgenda"] == "777"
+    assert result["doctor"] == "Adriana Abreu"
+
+
+def test_buscar_cita_proxima_handler_no_encontrada():
+    with patch("agent.tool_handlers.dentidesk.find_upcoming", return_value=None):
+        result = json.loads(handle_tool("buscar_cita_proxima_dentidesk",
+                                        {"cedula": "000"}))
+    assert result["found"] is False

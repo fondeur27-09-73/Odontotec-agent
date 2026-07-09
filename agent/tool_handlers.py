@@ -75,6 +75,7 @@ def handle_tool(tool_name: str, tool_input: dict) -> str:
         "get_patient": _get_patient,
         "save_patient": _save_patient,
         "buscar_cita_dentidesk": _buscar_cita_dentidesk,
+        "buscar_cita_proxima_dentidesk": _buscar_cita_proxima_dentidesk,
         "agendar_cita_dentidesk": _agendar_cita_dentidesk,
         "reagendar_cita_dentidesk": _reagendar_cita_dentidesk,
         "confirmar_cita_dentidesk": _confirmar_cita_dentidesk,
@@ -222,6 +223,22 @@ def _resolve_doctor(specialty: str) -> str | None:
     return doctor_map.get(str(specialty).strip().lower())
 
 
+def _cita_to_dict(cita: dict) -> dict:
+    """Normaliza una cita cruda de la API de Dentidesk al shape que ve el modelo."""
+    return {
+        "found": True,
+        "IdAgenda": cita.get("IdAgenda"),
+        "paciente": cita.get("PatientName"),
+        "fecha": cita.get("Date"),
+        "hora": cita.get("time"),
+        "procedimiento": cita.get("Reason"),
+        "doctor": cita.get("ProfessionalName"),
+        "especialidad": (cita.get("ProfessionalSpeciality") or [None])[0],
+        "estado": cita.get("Status"),
+        "sucursal": cita.get("LocationName"),
+    }
+
+
 def _buscar_cita_dentidesk(
     fecha_iso: str,
     cedula: str = "",
@@ -238,18 +255,23 @@ def _buscar_cita_dentidesk(
         cita = dentidesk.find_by_phone(telefono, fecha_iso, loc)
     if not cita:
         return {"found": False, "fecha": fecha_iso}
-    return {
-        "found": True,
-        "IdAgenda": cita.get("IdAgenda"),
-        "paciente": cita.get("PatientName"),
-        "fecha": cita.get("Date"),
-        "hora": cita.get("time"),
-        "procedimiento": cita.get("Reason"),
-        "doctor": cita.get("ProfessionalName"),
-        "especialidad": (cita.get("ProfessionalSpeciality") or [None])[0],
-        "estado": cita.get("Status"),
-        "sucursal": cita.get("LocationName"),
-    }
+    return _cita_to_dict(cita)
+
+
+def _buscar_cita_proxima_dentidesk(
+    cedula: str = "",
+    telefono: str = "",
+    dias: int = 30,
+    sucursal: str = "arroyo_hondo",
+) -> dict:
+    """LECTURA: busca la PRÓXIMA cita del paciente SIN conocer la fecha exacta, escaneando la agenda
+    real desde hoy hacia adelante (por cédula o teléfono). Para reagendar cuando el paciente no
+    recuerda el día de su cita actual. Devuelve la cita más temprana encontrada, o no encontrada."""
+    loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
+    cita = dentidesk.find_upcoming(cedula=cedula, phone=telefono, days=dias, location=loc)
+    if not cita:
+        return {"found": False}
+    return _cita_to_dict(cita)
 
 
 def _confirmar_cita_dentidesk(id_agenda: str, sucursal: str = "arroyo_hondo") -> dict:

@@ -155,6 +155,23 @@ OPENAI_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "buscar_cita_proxima_dentidesk",
+            "description": "LECTURA: busca la PRÓXIMA cita del paciente en la agenda real de Dentidesk SIN necesitar la fecha exacta (escanea desde hoy hacia adelante por cédula o teléfono). Úsalo para reagendar cuando NO sabes el día de la cita actual del paciente, para no tener que preguntárselo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cedula": {"type": "string", "description": "Cédula del paciente (opcional)"},
+                    "telefono": {"type": "string", "description": "Teléfono del paciente (opcional)"},
+                    "dias": {"type": "integer", "description": "Cuántos días hacia adelante escanear desde hoy (default 30, máx 60)"},
+                    "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina (default arroyo_hondo)"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "confirmar_cita_dentidesk",
             "description": "ESCRITURA: marca una cita existente de Dentidesk como Confirmada. Requiere el IdAgenda obtenido con buscar_cita_dentidesk. Solo en producción autorizada.",
             "parameters": {
