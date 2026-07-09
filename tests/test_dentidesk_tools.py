@@ -151,6 +151,37 @@ def test_reagendar_pasa_hora_24h():
         }))
     assert result["success"] is True
     assert mock_pw.call_args.kwargs["nueva_hora"] == "16:30"
+    # Sin cambio de tratamiento: no se toca doctor ni motivo.
+    assert mock_pw.call_args.kwargs["nuevo_doctor_label"] == ""
+    assert mock_pw.call_args.kwargs["nuevo_procedimiento"] == ""
+
+
+def test_reagendar_con_cambio_de_tratamiento_resuelve_doctor_nuevo():
+    # El paciente cambia de endodoncia a limpieza (general): se resuelve el doctor nuevo por
+    # especialidad y se pasa el nuevo motivo, además de mover fecha/hora.
+    with patch("agent.tool_handlers.dentidesk_playwright.move_appointment",
+               return_value={"success": True, "IdAgenda": "999"}) as mock_pw:
+        result = json.loads(handle_tool("reagendar_cita_dentidesk", {
+            "id_agenda": "999", "fecha_actual_iso": "2026-07-06", "patient_name": "Juan Pérez",
+            "doctor": "Cedano", "fecha_iso": "2026-07-07", "time": "10:00 AM",
+            "specialty": "ortodoncia", "procedimiento": "Brackets",
+        }))
+    assert result["success"] is True
+    kwargs = mock_pw.call_args.kwargs
+    assert kwargs["doctor_label"] == "Cedano"            # doctor ACTUAL (para ubicar la tarjeta)
+    assert kwargs["nuevo_doctor_label"] == "Cabrera"     # doctor NUEVO (ortodoncia)
+    assert kwargs["nuevo_procedimiento"] == "Brackets"
+
+
+def test_reagendar_especialidad_desconocida_no_llama_playwright():
+    with patch("agent.tool_handlers.dentidesk_playwright.move_appointment") as mock_pw:
+        result = json.loads(handle_tool("reagendar_cita_dentidesk", {
+            "id_agenda": "999", "fecha_actual_iso": "2026-07-06", "patient_name": "Juan Pérez",
+            "fecha_iso": "2026-07-07", "time": "10:00 AM", "specialty": "dermatologia",
+        }))
+    assert result["success"] is False
+    assert result["error"] == "doctor_no_mapeado"
+    mock_pw.assert_not_called()
 
 
 def test_agendar_idempotente_si_ya_hay_cita_ese_dia(monkeypatch):

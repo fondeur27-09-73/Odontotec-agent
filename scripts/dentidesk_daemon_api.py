@@ -65,6 +65,8 @@ class MoverCitaBody(BaseModel):
     nueva_hora: str
     sucursal: str = "214"
     doctor_label: str = ""
+    nuevo_doctor_label: str = ""
+    nuevo_procedimiento: str = ""
 
 
 # Todas las escrituras comparten UN solo navegador/página real (ver dentidesk_daemon.py). Sin

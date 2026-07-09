@@ -161,13 +161,20 @@ def _reagendar_cita_dentidesk(
     time: str,
     sucursal: str = "arroyo_hondo",
     doctor: str = "",
+    specialty: str = "",
+    procedimiento: str = "",
 ) -> dict:
     """ESCRITURA (UI Playwright): mueve una cita existente a otra fecha/hora (la API no puede).
     Backstop de horario. Bajo candado DENTIDESK_ALLOW_WRITES. fecha_actual_iso/patient_name/doctor
     son necesarios para que Playwright ubique la tarjeta de la cita en la grilla de la agenda
     (vienen de una llamada previa a buscar_cita_dentidesk — doctor es su campo "doctor"; sin él,
     la agenda puede quedar filtrada por otro doctor y la tarjeta no aparece, ver
-    dentidesk-playwright-bugs-2026-07-07)."""
+    dentidesk-playwright-bugs-2026-07-07).
+
+    CAMBIO DE TRATAMIENTO (opcional): si el paciente cambia de tratamiento al reagendar, pasar
+    specialty (la nueva especialidad del sistema) y/o procedimiento (el tratamiento en palabras).
+    specialty se resuelve al doctor nuevo (igual que en agendar) y se cambia en el modal junto con
+    el motivo — el modal de editar cita es el mismo que el de crear."""
     ok, msg = _within_clinic_hours(fecha_iso, time)
     if not ok:
         return {"success": False, "error": "fuera_de_horario", "message": msg}
@@ -175,10 +182,19 @@ def _reagendar_cita_dentidesk(
     if time24 is None:
         return {"success": False, "error": "hora_invalida",
                 "message": f"No entendí la hora '{time}'. Pida la hora de nuevo, ej: 10:00 AM."}
+    # Cambio de tratamiento: resolver la nueva especialidad al doctor nuevo (misma lógica que agendar).
+    # "" (general = personal fijo) es válido y significa NO tocar el doctor; None = especialidad mala.
+    nuevo_doctor_label = ""
+    if specialty:
+        nuevo_doctor_label = _resolve_doctor(specialty)
+        if nuevo_doctor_label is None:
+            return {"success": False, "error": "doctor_no_mapeado",
+                    "message": f"No hay doctor configurado para la especialidad '{specialty}'."}
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
     res = dentidesk_playwright.move_appointment(
         id_agenda=id_agenda, fecha_actual_iso=fecha_actual_iso, patient_name=patient_name,
         nueva_fecha_iso=fecha_iso, nueva_hora=time24, sucursal=loc, doctor_label=doctor,
+        nuevo_doctor_label=nuevo_doctor_label, nuevo_procedimiento=procedimiento,
     )
     return {"success": True, **(res if isinstance(res, dict) else {"result": res})}
 

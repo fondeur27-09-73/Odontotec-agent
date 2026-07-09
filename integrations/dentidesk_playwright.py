@@ -469,6 +469,7 @@ def create_appointment(
 def move_appointment(
     id_agenda: str, fecha_actual_iso: str, patient_name: str,
     nueva_fecha_iso: str, nueva_hora: str, sucursal: str = "214", doctor_label: str = "",
+    nuevo_doctor_label: str = "", nuevo_procedimiento: str = "",
 ) -> dict:
     """ESCRITURA (UI): mueve (reagenda) una cita existente a otra fecha/hora — la API no puede.
     Bajo candado DENTIDESK_ALLOW_WRITES.
@@ -476,11 +477,17 @@ def move_appointment(
     fecha_actual_iso/patient_name (de buscar_cita_dentidesk) son necesarios porque el IdAgenda NO
     se muestra en pantalla — hay que navegar al día correcto y clickear la tarjeta por nombre.
 
-    `doctor_label` (de buscar_cita_dentidesk, campo "doctor") es necesario porque la vista de la
-    agenda filtra por UN doctor a la vez (ver _select_doctor_filter) — sin esto, la tarjeta del
-    paciente no aparece si el filtro quedó en otro doctor (BUG 2026-07-07, silencioso: timeout sin
-    explicar por qué). Si viene vacío (caso "general", personal fijo sin doctor asignado) se omite
-    el filtro y se confía en lo que ya esté seleccionado — igual que el comportamiento previo.
+    `doctor_label` (de buscar_cita_dentidesk, campo "doctor") es el doctor ACTUAL de la cita, y es
+    necesario porque la vista de la agenda filtra por UN doctor a la vez (ver _select_doctor_filter)
+    — sin esto, la tarjeta del paciente no aparece si el filtro quedó en otro doctor (BUG 2026-07-07,
+    silencioso: timeout sin explicar por qué). Si viene vacío (caso "general", personal fijo sin
+    doctor asignado) se omite el filtro y se confía en lo que ya esté seleccionado.
+
+    CAMBIO DE TRATAMIENTO (opcional): el modal de editar cita es el MISMO que el de crear, así que
+    también se pueden cambiar el doctor (#dentista_cita) y el motivo (#motivo) al reagendar. Si
+    `nuevo_procedimiento` viene, se actualiza #motivo; si `nuevo_doctor_label` viene (no vacío), se
+    cambia el doctor al nuevo (el caller resolvió especialidad→doctor). Ambos se dejan tras
+    fecha/hora y justo antes de guardar, reutilizando los mismos helpers verificados de create.
 
     Navegación de fecha vía minicalendario (_goto_calendar_date) — VERIFICADA en vivo 2026-06-28
     (el intento anterior con fullCalendar('gotoDate', ...) estaba ROTO, mandaba a 1 Enero 1970).
@@ -493,6 +500,7 @@ def move_appointment(
             "id_agenda": id_agenda, "fecha_actual_iso": fecha_actual_iso,
             "patient_name": patient_name, "nueva_fecha_iso": nueva_fecha_iso,
             "nueva_hora": nueva_hora, "sucursal": sucursal, "doctor_label": doctor_label,
+            "nuevo_doctor_label": nuevo_doctor_label, "nuevo_procedimiento": nuevo_procedimiento,
         })
     from playwright.sync_api import sync_playwright  # import perezoso
     anio_act, mes_act, dia_act = fecha_actual_iso[:10].split("-")
@@ -518,6 +526,14 @@ def move_appointment(
             page.select_option("#aniocita", anio)
             page.select_option("#horac", hh.zfill(2))
             page.select_option("#minutos", mm.zfill(2))
+            # Cambio de tratamiento (si el paciente lo pidió): motivo primero, doctor AL FINAL
+            # (mismo motivo que en create: el select de doctores se resetea si se toca antes de que
+            # asiente su carga async — _select_doctor_verified verifica y reintenta).
+            if nuevo_procedimiento:
+                _select_motivo_fuzzy(page, nuevo_procedimiento)
+            if nuevo_doctor_label:
+                _wait_doctors_loaded(page)
+                _select_doctor_verified(page, nuevo_doctor_label)
             with page.expect_response(_es_respuesta_guardar_cita, timeout=15000) as resp_info:
                 page.click("#btn_guardar_cita")
             data = resp_info.value.json()
