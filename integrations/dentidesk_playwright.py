@@ -436,6 +436,14 @@ def create_appointment(
             if _ensure_logged_in(page):
                 page.goto(AGENDA_URL, wait_until="networkidle")
             inicio = f"{anio}-{mes}-{dia} {hh}:{mm}"
+            # Tras un login fresco (auto-recuperación), la agenda a veces aún no terminó de definir
+            # moment.js ni window.open_modal_cita aunque networkidle ya disparó — llamarlos de una
+            # vez tiraba "ReferenceError: moment is not defined" y la cita fallaba con 502. Espera a
+            # que AMBOS globales existan antes de abrir el modal (resuelve en <1s si ya cargaron).
+            page.wait_for_function(
+                "() => typeof moment !== 'undefined' && typeof window.open_modal_cita === 'function'",
+                timeout=15000,
+            )
             page.evaluate(
                 "([ini]) => window.open_modal_cita(moment(ini), moment(ini).add(30, 'minutes'))",
                 [inicio],
