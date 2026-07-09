@@ -277,7 +277,7 @@ def _buscar_cita_dentidesk(
 def _buscar_cita_proxima_dentidesk(
     cedula: str = "",
     telefono: str = "",
-    dias: int = 7,
+    dias: int = 10,
     sucursal: str = "arroyo_hondo",
 ) -> dict:
     """LECTURA: busca la PRÓXIMA cita del paciente SIN conocer la fecha exacta, escaneando la agenda
