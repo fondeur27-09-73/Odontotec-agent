@@ -83,7 +83,7 @@ def test_save_patient_tool_schema_includes_cedula():
 
 def test_escalate_prematuro_se_bloquea_y_reintenta_agenda():
     # Bug 2026-07-08: ante reagendar el modelo llamaba escalate_to_human de una, sin tocar la
-    # agenda. El guardrail lo bloquea UNA vez (sin ejecutar handle_tool) y lo empuja a intentar
+    # agenda. El guardrail lo bloquea (sin ejecutar handle_tool) y lo empuja a intentar
     # buscar_cita_dentidesk; recién entonces se ejecuta una tool real.
     with patch("agent.claude._get_client") as mock_fn, \
          patch("agent.claude.handle_tool",
@@ -99,6 +99,42 @@ def test_escalate_prematuro_se_bloquea_y_reintenta_agenda():
         assert mock_tool.call_count == 1
         assert mock_tool.call_args.args[0] == "buscar_cita_dentidesk"
         assert "confirmo" in result.lower()
+
+
+def test_escalate_bloqueo_es_persistente_no_solo_una_vez():
+    # Si el modelo insiste (escala DOS veces seguidas sin fallo de escritura), el guardrail lo
+    # bloquea las dos: nunca ejecuta escalate_to_human. found=false de una lectura NO habilita.
+    with patch("agent.claude._get_client") as mock_fn, \
+         patch("agent.claude.handle_tool",
+               return_value=json.dumps({"found": False})) as mock_tool:
+        mock_fn.return_value.chat.completions.create.side_effect = [
+            _tool_response("escalate_to_human", {"reason": "otro", "conversation_id": 1}),
+            _tool_response("buscar_cita_dentidesk", {"fecha_iso": "2026-07-21"}),
+            _tool_response("escalate_to_human", {"reason": "consulta_compleja", "conversation_id": 1}),
+            _text_response("¿Me indica la fecha de su cita actual, por favor?"),
+        ]
+        from agent.claude import run_agent
+        result = run_agent([{"role": "user", "content": "quiero mover mi cita"}], 1)
+        # Solo se ejecutó la lectura; ninguno de los dos escalados pasó.
+        assert mock_tool.call_count == 1
+        assert mock_tool.call_args.args[0] == "buscar_cita_dentidesk"
+        assert "fecha" in result.lower()
+
+
+def test_escalate_permitido_si_paciente_pide_humano_explicito():
+    # Excepción legítima: el paciente pide hablar con una persona → escalate SÍ se ejecuta de una.
+    with patch("agent.claude._get_client") as mock_fn, \
+         patch("agent.claude.handle_tool",
+               return_value=json.dumps({"success": True, "escalated": True})) as mock_tool:
+        mock_fn.return_value.chat.completions.create.side_effect = [
+            _tool_response("escalate_to_human", {"reason": "otro", "conversation_id": 1}),
+            _text_response("Con gusto, la comunico con una compañera."),
+        ]
+        from agent.claude import run_agent
+        result = run_agent(
+            [{"role": "user", "content": "no quiero un bot, quiero hablar con una persona"}], 1)
+        assert mock_tool.call_count == 1
+        assert mock_tool.call_args.args[0] == "escalate_to_human"
 
 
 def test_escalate_permitido_tras_intento_real_de_agenda():
