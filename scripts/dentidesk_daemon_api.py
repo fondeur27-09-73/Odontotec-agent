@@ -17,8 +17,13 @@ El lado del agente (integrations/dentidesk_playwright.py) le habla a esto cuando
 DENTIDESK_DAEMON_URL está seteado — ver ese módulo para el cliente HTTP.
 """
 import hmac
+import logging
 import os
 import threading
+import traceback
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("dentidesk-daemon-api")
 
 # Fuerza el modo CDP local ANTES de importar integrations.dentidesk_playwright: ese módulo lee
 # DENTIDESK_CDP_URL/DENTIDESK_DAEMON_URL como constantes de módulo al importarse, así que el
@@ -87,6 +92,9 @@ def crear_cita(body: CrearCitaBody):
         try:
             return dp.create_appointment(**body.model_dump())
         except Exception as e:
+            # Traceback COMPLETO al log del daemon: sin esto, el 502 no dice POR QUÉ falló
+            # create_appointment (el detalle solo va en el body de la respuesta, que nadie loguea).
+            logger.error("crear_cita FALLÓ: %s\n%s", e, traceback.format_exc())
             raise HTTPException(status_code=502, detail=str(e))
 
 
@@ -96,4 +104,5 @@ def mover_cita(body: MoverCitaBody):
         try:
             return dp.move_appointment(**body.model_dump())
         except Exception as e:
+            logger.error("mover_cita FALLÓ: %s\n%s", e, traceback.format_exc())
             raise HTTPException(status_code=502, detail=str(e))

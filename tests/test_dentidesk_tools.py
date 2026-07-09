@@ -1,6 +1,6 @@
 """Tests de Fase 1 (auditoría 2026-07-05): normalización de hora a 24h y mapa especialidad→doctor."""
 import json
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -276,3 +276,26 @@ def test_buscar_cita_proxima_handler_no_encontrada():
         result = json.loads(handle_tool("buscar_cita_proxima_dentidesk",
                                         {"cedula": "000"}))
     assert result["found"] is False
+
+
+# --- _ensure_logged_in: auto-recuperación de sesión del daemon (bug 2026-07-09) ---
+
+def test_ensure_logged_in_reloguea_si_hay_formulario():
+    # Sesión caída (tras redeploy del daemon): la agenda muestra #user-login → re-loguea solo.
+    from integrations import dentidesk_playwright as dp
+    page = MagicMock()
+    page.locator.return_value.count.return_value = 1  # existe #user-login
+    with patch.object(dp, "_login") as mock_login:
+        did = dp._ensure_logged_in(page)
+    assert did is True
+    mock_login.assert_called_once_with(page)
+
+
+def test_ensure_logged_in_no_hace_nada_si_sesion_sana():
+    from integrations import dentidesk_playwright as dp
+    page = MagicMock()
+    page.locator.return_value.count.return_value = 0  # no hay formulario de login
+    with patch.object(dp, "_login") as mock_login:
+        did = dp._ensure_logged_in(page)
+    assert did is False
+    mock_login.assert_not_called()

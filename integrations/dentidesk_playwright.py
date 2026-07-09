@@ -85,6 +85,25 @@ def _login(page):
     page.wait_for_load_state("networkidle")
 
 
+def _ensure_logged_in(page) -> bool:
+    """AUTO-RECUPERACIÓN de sesión. Si el navegador persistente del daemon quedó DESLOGUEADO (pasa
+    tras un redeploy del daemon: reinicia Chrome y la sesión de Dentidesk se cae), la agenda redirige
+    al formulario de login (#user-login). Antes eso hacía que create/move_appointment fallaran con
+    502 en bucle y solo se arreglaba re-logueando a mano por VNC. Ahora, si detectamos el formulario
+    de login, volvemos a loguear SOLOS con el perfil persistente — que por ser un device de confianza
+    normalmente NO dispara reCAPTCHA. Devuelve True si tuvo que re-loguear (para re-navegar a la
+    agenda). Si no hay formulario de login (sesión sana), no hace nada."""
+    try:
+        if page.locator("#user-login").count() > 0:
+            _login(page)
+            return True
+    except Exception:
+        # Un fallo aquí no debe enmascarar el error real del agendado: se sigue y, si de verdad no
+        # hay sesión, el paso siguiente (open_modal_cita / tarjeta) fallará con un error visible.
+        pass
+    return False
+
+
 CDP_URL = os.getenv("DENTIDESK_CDP_URL", "")  # ej "http://127.0.0.1:9222" -- mismo host/proceso
 # DENTIDESK_DAEMON_URL: en producción real (agente en un contenedor, daemon en otro), en vez de
 # CDP_URL se usa esto -- URL de la API HTTP interna del contenedor "daemon" (ver
@@ -412,6 +431,10 @@ def create_appointment(
         page, cerrar = _open_write_page(p)
         try:
             page.goto(AGENDA_URL, wait_until="networkidle")
+            # Auto-recuperación: si la sesión se cayó (redeploy del daemon), re-loguea y vuelve a la
+            # agenda antes de intentar abrir el modal (si no, window.open_modal_cita no existiría).
+            if _ensure_logged_in(page):
+                page.goto(AGENDA_URL, wait_until="networkidle")
             inicio = f"{anio}-{mes}-{dia} {hh}:{mm}"
             page.evaluate(
                 "([ini]) => window.open_modal_cita(moment(ini), moment(ini).add(30, 'minutes'))",
@@ -510,6 +533,9 @@ def move_appointment(
         page, cerrar = _open_write_page(p)
         try:
             page.goto(AGENDA_URL, wait_until="networkidle")
+            # Auto-recuperación de sesión (ver create_appointment / _ensure_logged_in).
+            if _ensure_logged_in(page):
+                page.goto(AGENDA_URL, wait_until="networkidle")
             if doctor_label:
                 _select_doctor_filter(page, doctor_label)
             _goto_calendar_date(page, int(anio_act), int(mes_act), int(dia_act))
