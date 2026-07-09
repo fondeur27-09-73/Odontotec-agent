@@ -136,13 +136,14 @@ def _cita_matches(cita: dict, target_doc: str, target_phone: str) -> bool:
 
 
 def find_upcoming(cedula: str = "", phone: str = "", start_iso: str | None = None,
-                  days: int = 30, location: str | None = None,
+                  days: int = 7, location: str | None = None,
                   max_workers: int = 6) -> dict | None:
     """Busca la PRÓXIMA cita del paciente en una ventana de días, por cédula o teléfono, SIN que el
     paciente tenga que recordar la fecha exacta. getAgendaDay solo lee la agenda de UN día y no hay
     endpoint de búsqueda por paciente, así que se escanea día por día (en paralelo) desde start_iso
     (o desde hoy) hacia adelante, saltando domingos (clínica cerrada). Devuelve la cita de fecha más
-    temprana que matchee, o None. `days` se acota a [1, 60] para no disparar una tormenta de logins."""
+    temprana que matchee, o None. `days` se acota a [1, 60] para no disparar una tormenta de logins.
+    DEFAULT: 7 días (búsqueda rápida; la mayoría de citas son próximas)."""
     loc = location or DEFAULT_LOCATION
     target_doc = _norm_doc(cedula) if cedula else ""
     target_phone = _norm_phone(phone) if phone else ""

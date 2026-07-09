@@ -277,14 +277,19 @@ def _buscar_cita_dentidesk(
 def _buscar_cita_proxima_dentidesk(
     cedula: str = "",
     telefono: str = "",
-    dias: int = 30,
+    dias: int = 7,
     sucursal: str = "arroyo_hondo",
 ) -> dict:
     """LECTURA: busca la PRÓXIMA cita del paciente SIN conocer la fecha exacta, escaneando la agenda
-    real desde hoy hacia adelante (por cédula o teléfono). Para reagendar cuando el paciente no
-    recuerda el día de su cita actual. Devuelve la cita más temprana encontrada, o no encontrada."""
+    real desde hoy hacia adelante (por teléfono preferentemente, fallback a cédula). Para reagendar
+    cuando el paciente no recuerda el día de su cita actual. Devuelve la cita más temprana encontrada,
+    o no encontrada. NOTA: busca preferentemente por teléfono (más confiable que cédula) y acota a
+    7 días (búsqueda más rápida, la cita suele ser próxima)."""
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
-    cita = dentidesk.find_upcoming(cedula=cedula, phone=telefono, days=dias, location=loc)
+    # ponytail: prefer phone over cedula (phone more reliable, cedula format varies in Dentidesk storage)
+    cita = dentidesk.find_upcoming(cedula="", phone=telefono, days=dias, location=loc) if telefono else None
+    if not cita and cedula:
+        cita = dentidesk.find_upcoming(cedula=cedula, phone="", days=dias, location=loc)
     if not cita:
         return {"found": False}
     return _cita_to_dict(cita)
