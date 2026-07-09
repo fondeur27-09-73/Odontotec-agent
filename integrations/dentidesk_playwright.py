@@ -85,23 +85,51 @@ def _login(page):
     page.wait_for_load_state("networkidle")
 
 
-def _ensure_logged_in(page) -> bool:
-    """AUTO-RECUPERACIÓN de sesión. Si el navegador persistente del daemon quedó DESLOGUEADO (pasa
-    tras un redeploy del daemon: reinicia Chrome y la sesión de Dentidesk se cae), la agenda redirige
-    al formulario de login (#user-login). Antes eso hacía que create/move_appointment fallaran con
-    502 en bucle y solo se arreglaba re-logueando a mano por VNC. Ahora, si detectamos el formulario
-    de login, volvemos a loguear SOLOS con el perfil persistente — que por ser un device de confianza
-    normalmente NO dispara reCAPTCHA. Devuelve True si tuvo que re-loguear (para re-navegar a la
-    agenda). Si no hay formulario de login (sesión sana), no hace nada."""
+class SesionNoLogueada(RuntimeError):
+    """El navegador persistente del daemon NO está logueado en Dentidesk (la agenda redirige al
+    login). No es un error transitorio que se arregle reintentando: alguien tiene que iniciar sesión
+    UNA vez a mano por VNC (el login exige resolver un reCAPTCHA de imágenes, imposible de
+    automatizar — ver scripts/dentidesk_daemon.py). Se lanza para poder distinguir 'no logueado' de
+    un fallo real del formulario y responder 409 (no 502) al agente."""
+
+
+# La agenda logueada define moment.js y la global window.open_modal_cita; la página de login NO.
+# Por eso "¿existe moment + open_modal_cita?" es un proxy fiable de "¿hay sesión?" — sirve tanto
+# para el camino de crear (que sí los usa) como para el de mover (que trabaja por clicks).
+_SESION_VIVA_JS = (
+    "() => typeof moment !== 'undefined' && typeof window.open_modal_cita === 'function'"
+)
+
+
+def _session_live(page) -> bool:
+    """True si la página actual es la agenda logueada (moment + open_modal_cita presentes)."""
     try:
-        if page.locator("#user-login").count() > 0:
-            _login(page)
-            return True
+        return bool(page.evaluate(_SESION_VIVA_JS))
     except Exception:
-        # Un fallo aquí no debe enmascarar el error real del agendado: se sigue y, si de verdad no
-        # hay sesión, el paso siguiente (open_modal_cita / tarjeta) fallará con un error visible.
+        return False
+
+
+def _require_session_live(page) -> None:
+    """Verifica que el navegador del daemon esté logueado ANTES de intentar escribir. Si no lo está,
+    aborta con SesionNoLogueada y un mensaje que dice exactamente qué hacer — en vez de reventar más
+    adelante con el 'moment is not defined' críptico que nos pasó 3 veces. Da un margen corto por si
+    la agenda todavía está pintando tras el goto (resuelve en <1s si ya cargó)."""
+    try:
+        page.wait_for_function(_SESION_VIVA_JS, timeout=8000)
+        return
+    except Exception:
         pass
-    return False
+    hay_login = False
+    try:
+        hay_login = page.locator("#user-login").count() > 0
+    except Exception:
+        pass
+    raise SesionNoLogueada(
+        "El navegador del daemon NO está logueado en Dentidesk"
+        + (" (está mostrando el formulario de login)." if hay_login else ".")
+        + " Un humano debe iniciar sesión UNA vez por VNC (resolver el reCAPTCHA) y dejar la ventana"
+        " abierta. Ver scripts/dentidesk_daemon.py y la memoria dentidesk-escalate-bug."
+    )
 
 
 CDP_URL = os.getenv("DENTIDESK_CDP_URL", "")  # ej "http://127.0.0.1:9222" -- mismo host/proceso
@@ -120,6 +148,17 @@ def _call_daemon(path: str, payload: dict) -> dict:
     import httpx
     headers = {"X-Daemon-Secret": DAEMON_SECRET} if DAEMON_SECRET else {}
     r = httpx.post(f"{DAEMON_URL}{path}", json=payload, headers=headers, timeout=30.0)
+    if r.status_code == 409:
+        # El daemon respondió "sesión no logueada" (SesionNoLogueada). No es transitorio: no se
+        # reintenta, hay que loguear a mano por VNC. Se devuelve estructurado para que el caller
+        # (tool_handlers) le avise a Carla que la cita NO se registró, en vez de tumbar todo con 502.
+        try:
+            detalle = r.json().get("detail", "")
+        except Exception:
+            detalle = r.text
+        return {"success": False, "error": "daemon_no_logueado", "detail": detalle,
+                "message": "No pude registrar la cita en este momento por un problema técnico. "
+                           "Un miembro del equipo la va a agendar enseguida y le confirmamos."}
     r.raise_for_status()
     return r.json()
 
@@ -431,19 +470,12 @@ def create_appointment(
         page, cerrar = _open_write_page(p)
         try:
             page.goto(AGENDA_URL, wait_until="networkidle")
-            # Auto-recuperación: si la sesión se cayó (redeploy del daemon), re-loguea y vuelve a la
-            # agenda antes de intentar abrir el modal (si no, window.open_modal_cita no existiría).
-            if _ensure_logged_in(page):
-                page.goto(AGENDA_URL, wait_until="networkidle")
+            # Chequeo de sesión ANTES de tocar nada: si el daemon no está logueado, la agenda es en
+            # realidad el formulario de login (sin moment ni open_modal_cita) y todo lo de abajo
+            # reventaría con 'moment is not defined'. Aquí aborta CLARO con SesionNoLogueada (→ 409),
+            # que le dice al humano que loguee por VNC, en vez de fallar en bucle sin explicación.
+            _require_session_live(page)
             inicio = f"{anio}-{mes}-{dia} {hh}:{mm}"
-            # Tras un login fresco (auto-recuperación), la agenda a veces aún no terminó de definir
-            # moment.js ni window.open_modal_cita aunque networkidle ya disparó — llamarlos de una
-            # vez tiraba "ReferenceError: moment is not defined" y la cita fallaba con 502. Espera a
-            # que AMBOS globales existan antes de abrir el modal (resuelve en <1s si ya cargaron).
-            page.wait_for_function(
-                "() => typeof moment !== 'undefined' && typeof window.open_modal_cita === 'function'",
-                timeout=15000,
-            )
             page.evaluate(
                 "([ini]) => window.open_modal_cita(moment(ini), moment(ini).add(30, 'minutes'))",
                 [inicio],
@@ -541,9 +573,10 @@ def move_appointment(
         page, cerrar = _open_write_page(p)
         try:
             page.goto(AGENDA_URL, wait_until="networkidle")
-            # Auto-recuperación de sesión (ver create_appointment / _ensure_logged_in).
-            if _ensure_logged_in(page):
-                page.goto(AGENDA_URL, wait_until="networkidle")
+            # Chequeo de sesión ANTES de tocar nada (ver create_appointment / _require_session_live):
+            # si el daemon no está logueado, aborta CLARO con SesionNoLogueada en vez de fallar por
+            # timeout buscando la tarjeta en una página de login.
+            _require_session_live(page)
             if doctor_label:
                 _select_doctor_filter(page, doctor_label)
             _goto_calendar_date(page, int(anio_act), int(mes_act), int(dia_act))
@@ -576,5 +609,24 @@ def move_appointment(
             if not data.get("id_agenda"):
                 return {"success": False, "error": "guardar_cita_fallo", "raw": data}
             return {"success": True, "IdAgenda": data.get("id_agenda")}
+        finally:
+            cerrar()
+
+
+def session_status() -> dict:
+    """SOLO LECTURA: ¿el navegador persistente del daemon está logueado en Dentidesk? Navega a la
+    agenda y verifica la liveness de sesión (moment + open_modal_cita). No exige
+    DENTIDESK_ALLOW_WRITES (no escribe nada) y no lanza SesionNoLogueada — devuelve el estado para
+    que el endpoint /session lo reporte. Solo aplica en modo CDP (daemon)."""
+    if not CDP_URL:
+        raise RuntimeError(
+            "session_status solo aplica en modo daemon/CDP (DENTIDESK_CDP_URL vacío)."
+        )
+    from playwright.sync_api import sync_playwright  # import perezoso
+    with sync_playwright() as p:
+        page, cerrar = _open_write_page(p)
+        try:
+            page.goto(AGENDA_URL, wait_until="networkidle")
+            return {"logueado": _session_live(page)}
         finally:
             cerrar()

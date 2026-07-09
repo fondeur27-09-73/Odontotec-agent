@@ -278,24 +278,51 @@ def test_buscar_cita_proxima_handler_no_encontrada():
     assert result["found"] is False
 
 
-# --- _ensure_logged_in: auto-recuperación de sesión del daemon (bug 2026-07-09) ---
+# --- Chequeo de sesión del daemon (rework 2026-07-09): en vez de auto-login inútil (no pasa el
+#     reCAPTCHA), fallar CLARO con SesionNoLogueada si el navegador no está logueado. ---
 
-def test_ensure_logged_in_reloguea_si_hay_formulario():
-    # Sesión caída (tras redeploy del daemon): la agenda muestra #user-login → re-loguea solo.
+def test_session_live_true_cuando_agenda_cargada():
     from integrations import dentidesk_playwright as dp
     page = MagicMock()
+    page.evaluate.return_value = True  # moment + open_modal_cita presentes
+    assert dp._session_live(page) is True
+
+
+def test_session_live_false_si_evaluate_revienta():
+    from integrations import dentidesk_playwright as dp
+    page = MagicMock()
+    page.evaluate.side_effect = Exception("moment is not defined")
+    assert dp._session_live(page) is False
+
+
+def test_require_session_live_pasa_si_agenda_lista():
+    # wait_for_function no lanza → sesión viva → no explota.
+    from integrations import dentidesk_playwright as dp
+    page = MagicMock()
+    page.wait_for_function.return_value = None
+    dp._require_session_live(page)  # no debe lanzar
+
+
+def test_require_session_live_lanza_si_hay_formulario_login():
+    # La agenda es en realidad el login (#user-login) → SesionNoLogueada con mensaje claro.
+    from integrations import dentidesk_playwright as dp
+    page = MagicMock()
+    page.wait_for_function.side_effect = Exception("timeout")  # moment nunca aparece
     page.locator.return_value.count.return_value = 1  # existe #user-login
-    with patch.object(dp, "_login") as mock_login:
-        did = dp._ensure_logged_in(page)
-    assert did is True
-    mock_login.assert_called_once_with(page)
+    with pytest.raises(dp.SesionNoLogueada) as exc:
+        dp._require_session_live(page)
+    assert "login" in str(exc.value).lower()
 
 
-def test_ensure_logged_in_no_hace_nada_si_sesion_sana():
+def test_call_daemon_409_devuelve_error_estructurado():
+    # El daemon responde 409 (no logueado) → dict success:False, NO excepción.
     from integrations import dentidesk_playwright as dp
-    page = MagicMock()
-    page.locator.return_value.count.return_value = 0  # no hay formulario de login
-    with patch.object(dp, "_login") as mock_login:
-        did = dp._ensure_logged_in(page)
-    assert did is False
-    mock_login.assert_not_called()
+    resp = MagicMock()
+    resp.status_code = 409
+    resp.json.return_value = {"detail": "no logueado"}
+    with patch.object(dp, "DAEMON_URL", "http://daemon:8100"), \
+         patch("httpx.post", return_value=resp):
+        out = dp._call_daemon("/crear_cita", {})
+    assert out["success"] is False
+    assert out["error"] == "daemon_no_logueado"
+    assert "message" in out

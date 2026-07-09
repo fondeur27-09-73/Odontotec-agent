@@ -86,11 +86,27 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/session", dependencies=[Depends(require_auth)])
+def session():
+    """¿El navegador persistente está logueado en Dentidesk? Sirve para monitorear el daemon SIN
+    intentar una cita — si devuelve {"logueado": false}, alguien tiene que entrar por VNC."""
+    try:
+        return dp.session_status()
+    except Exception as e:
+        logger.error("session FALLÓ: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @app.post("/crear_cita", dependencies=[Depends(require_auth)])
 def crear_cita(body: CrearCitaBody):
     with _write_lock:
         try:
             return dp.create_appointment(**body.model_dump())
+        except dp.SesionNoLogueada as e:
+            # NO es un fallo del formulario: el navegador no está logueado. 409 (no 502) para que el
+            # agente lo distinga y le avise a Carla que la cita no se registró, sin bucle de 502.
+            logger.warning("crear_cita: sesión no logueada — %s", e)
+            raise HTTPException(status_code=409, detail=str(e))
         except Exception as e:
             # Traceback COMPLETO al log del daemon: sin esto, el 502 no dice POR QUÉ falló
             # create_appointment (el detalle solo va en el body de la respuesta, que nadie loguea).
@@ -103,6 +119,9 @@ def mover_cita(body: MoverCitaBody):
     with _write_lock:
         try:
             return dp.move_appointment(**body.model_dump())
+        except dp.SesionNoLogueada as e:
+            logger.warning("mover_cita: sesión no logueada — %s", e)
+            raise HTTPException(status_code=409, detail=str(e))
         except Exception as e:
             logger.error("mover_cita FALLÓ: %s\n%s", e, traceback.format_exc())
             raise HTTPException(status_code=502, detail=str(e))
