@@ -117,6 +117,22 @@ def find_by_phone(phone: str, date_iso: str, location: str | None = None) -> dic
     return None
 
 
+def find_in_day(date_iso: str, cedula: str = "", phone: str = "", nombre: str = "",
+                location: str | None = None) -> dict | None:
+    """Busca la cita de un paciente en la agenda de UN día, por cédula, teléfono o nombre.
+    Mismo criterio de match que find_upcoming (_cita_matches), así el fallback por nombre para
+    citas de TERCEROS funciona igual sepamos o no la fecha exacta. Devuelve la cita o None."""
+    target_doc = _norm_doc(cedula) if cedula else ""
+    target_phone = _norm_phone(phone) if phone else ""
+    target_name = _norm_name_tokens(nombre) if nombre else frozenset()
+    if not target_doc and not target_phone and len(target_name) < 2:
+        return None
+    for cita in get_agenda_day(date_iso, location):
+        if _cita_matches(cita, target_doc, target_phone, target_name):
+            return cita
+    return None
+
+
 def _today_clinic():
     """Fecha de hoy en la zona horaria de la clínica (para escanear la agenda hacia adelante)."""
     try:

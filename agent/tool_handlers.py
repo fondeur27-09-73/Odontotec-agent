@@ -259,16 +259,15 @@ def _buscar_cita_dentidesk(
     fecha_iso: str,
     cedula: str = "",
     telefono: str = "",
+    nombre: str = "",
     sucursal: str = "arroyo_hondo",
 ) -> dict:
     """LECTURA: busca la cita del paciente en la agenda real de Dentidesk para un día.
-    Empareja por cédula o por teléfono. Devuelve la cita (datos del propio paciente) o no encontrada."""
+    Empareja por cédula, teléfono o NOMBRE (fallback para citas de terceros, donde el tel/cédula
+    del remitente no coincide). Devuelve la cita o no encontrada."""
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
-    cita = None
-    if cedula:
-        cita = dentidesk.find_by_cedula(cedula, fecha_iso, loc)
-    if cita is None and telefono:
-        cita = dentidesk.find_by_phone(telefono, fecha_iso, loc)
+    cita = dentidesk.find_in_day(fecha_iso, cedula=cedula, phone=telefono,
+                                 nombre=nombre, location=loc)
     if not cita:
         return {"found": False, "fecha": fecha_iso}
     return _cita_to_dict(cita)
@@ -287,12 +286,10 @@ def _buscar_cita_proxima_dentidesk(
     el tel/cédula del remitente de WhatsApp no coincide con los datos guardados en la cita — es como
     el humano la ubica en la UI. Devuelve la cita más temprana encontrada, o no encontrada."""
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
-    # ponytail: prefer phone over cedula (phone more reliable, cedula format varies in Dentidesk storage)
-    cita = dentidesk.find_upcoming(phone=telefono, days=dias, location=loc) if telefono else None
-    if not cita and cedula:
-        cita = dentidesk.find_upcoming(cedula=cedula, days=dias, location=loc)
-    if not cita and nombre:
-        cita = dentidesk.find_upcoming(nombre=nombre, days=dias, location=loc)
+    # Un solo escaneo con los 3 datos: _cita_matches hace OR (tel | cédula | nombre). Escanear una
+    # vez por dato costaba 3x logins y 3x tiempo para el mismo resultado.
+    cita = dentidesk.find_upcoming(cedula=cedula, phone=telefono, nombre=nombre,
+                                   days=dias, location=loc)
     if not cita:
         return {"found": False}
     return _cita_to_dict(cita)
