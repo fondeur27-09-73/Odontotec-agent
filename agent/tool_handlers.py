@@ -277,19 +277,22 @@ def _buscar_cita_dentidesk(
 def _buscar_cita_proxima_dentidesk(
     cedula: str = "",
     telefono: str = "",
+    nombre: str = "",
     dias: int = 10,
     sucursal: str = "arroyo_hondo",
 ) -> dict:
     """LECTURA: busca la PRÓXIMA cita del paciente SIN conocer la fecha exacta, escaneando la agenda
-    real desde hoy hacia adelante (por teléfono preferentemente, fallback a cédula). Para reagendar
-    cuando el paciente no recuerda el día de su cita actual. Devuelve la cita más temprana encontrada,
-    o no encontrada. NOTA: busca preferentemente por teléfono (más confiable que cédula) y acota a
-    7 días (búsqueda más rápida, la cita suele ser próxima)."""
+    real desde hoy hacia adelante. Prueba en orden: teléfono, cédula, y por último NOMBRE (nombre y
+    apellido). El nombre es el fallback para citas de TERCEROS (reservadas para otra persona), donde
+    el tel/cédula del remitente de WhatsApp no coincide con los datos guardados en la cita — es como
+    el humano la ubica en la UI. Devuelve la cita más temprana encontrada, o no encontrada."""
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
     # ponytail: prefer phone over cedula (phone more reliable, cedula format varies in Dentidesk storage)
-    cita = dentidesk.find_upcoming(cedula="", phone=telefono, days=dias, location=loc) if telefono else None
+    cita = dentidesk.find_upcoming(phone=telefono, days=dias, location=loc) if telefono else None
     if not cita and cedula:
-        cita = dentidesk.find_upcoming(cedula=cedula, phone="", days=dias, location=loc)
+        cita = dentidesk.find_upcoming(cedula=cedula, days=dias, location=loc)
+    if not cita and nombre:
+        cita = dentidesk.find_upcoming(nombre=nombre, days=dias, location=loc)
     if not cita:
         return {"found": False}
     return _cita_to_dict(cita)

@@ -131,12 +131,13 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "buscar_cita_proxima_dentidesk",
-            "description": "LECTURA: busca la PRÓXIMA cita del paciente en la agenda real de Dentidesk SIN necesitar la fecha exacta (escanea desde hoy hacia adelante por cédula o teléfono). Úsalo para reagendar cuando NO sabes el día de la cita actual del paciente, para no tener que preguntárselo.",
+            "description": "LECTURA: busca la PRÓXIMA cita del paciente en la agenda real de Dentidesk SIN necesitar la fecha exacta (escanea desde hoy hacia adelante por teléfono, cédula o nombre). Úsalo para reagendar cuando NO sabes el día de la cita actual del paciente. IMPORTANTE: si la cita es para OTRA persona (un familiar), el teléfono/cédula del que escribe NO va a coincidir — en ese caso pide y pasa el 'nombre' completo del paciente (nombre y apellido) para encontrarla.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "cedula": {"type": "string", "description": "Cédula del paciente (opcional)"},
                     "telefono": {"type": "string", "description": "Teléfono del paciente (opcional)"},
+                    "nombre": {"type": "string", "description": "Nombre y apellido del paciente (opcional). Fallback para citas de terceros/familiares. Requiere al menos nombre + apellido."},
                     "dias": {"type": "integer", "description": "Cuántos días hacia adelante escanear desde hoy (default 30, máx 60)"},
                     "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina (default arroyo_hondo)"}
                 },

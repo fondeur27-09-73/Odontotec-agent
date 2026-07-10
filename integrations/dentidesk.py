@@ -18,6 +18,7 @@ REGLAS:
 import os
 import json
 import httpx
+import unicodedata
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
@@ -125,17 +126,26 @@ def _today_clinic():
         return datetime.now().date()
 
 
-def _cita_matches(cita: dict, target_doc: str, target_phone: str) -> bool:
+def _cita_matches(cita: dict, target_doc: str, target_phone: str,
+                  target_name_tokens: frozenset[str] = frozenset()) -> bool:
     if target_doc and _norm_doc(cita.get("PatientDocument", "")) == target_doc:
         return True
     if target_phone:
         for field in ("Phone", "Phone2"):
             if _norm_phone(cita.get(field, "")) == target_phone:
                 return True
+    # Fallback por nombre: todas las palabras del nombre buscado aparecen en el nombre de la cita.
+    # Para citas de TERCEROS (reservadas para otra persona) el tel/cédula del remitente no matchea,
+    # pero el nombre sí — es como el humano la ubica en la UI. Requiere >=2 tokens para no dar
+    # falsos positivos con un solo apellido común.
+    if len(target_name_tokens) >= 2:
+        cita_tokens = _norm_name_tokens(cita.get("PatientName", ""))
+        if target_name_tokens <= cita_tokens:
+            return True
     return False
 
 
-def find_upcoming(cedula: str = "", phone: str = "", start_iso: str | None = None,
+def find_upcoming(cedula: str = "", phone: str = "", nombre: str = "", start_iso: str | None = None,
                   days: int = 10, location: str | None = None,
                   max_workers: int = 6) -> dict | None:
     """Busca la PRÓXIMA cita del paciente en una ventana de días, por cédula o teléfono, SIN que el
@@ -147,7 +157,8 @@ def find_upcoming(cedula: str = "", phone: str = "", start_iso: str | None = Non
     loc = location or DEFAULT_LOCATION
     target_doc = _norm_doc(cedula) if cedula else ""
     target_phone = _norm_phone(phone) if phone else ""
-    if not target_doc and not target_phone:
+    target_name = _norm_name_tokens(nombre) if nombre else frozenset()
+    if not target_doc and not target_phone and len(target_name) < 2:
         return None
     if start_iso:
         try:
@@ -163,7 +174,7 @@ def find_upcoming(cedula: str = "", phone: str = "", start_iso: str | None = Non
     def _match_day(date_iso: str):
         try:
             for cita in get_agenda_day(date_iso, loc):
-                if _cita_matches(cita, target_doc, target_phone):
+                if _cita_matches(cita, target_doc, target_phone, target_name):
                     return (date_iso, cita)
         except Exception:
             return None
@@ -181,9 +192,22 @@ def _norm_doc(doc: str) -> str:
     return "".join(c for c in str(doc) if c.isdigit())
 
 
+def _norm_name_tokens(name: str) -> frozenset[str]:
+    """Nombre -> set de palabras sin acentos, minúsculas. El orden no importa ('Ramírez, José'
+    matchea 'jose gabriel ramirez') y se ignoran signos/comas. Tokens de 1 letra se descartan."""
+    nfkd = unicodedata.normalize("NFKD", str(name).lower())
+    ascii_only = "".join(c if unicodedata.category(c) != "Mn" else "" for c in nfkd)
+    return frozenset(t for t in "".join(
+        c if c.isalnum() else " " for c in ascii_only).split() if len(t) > 1)
+
+
 def _norm_phone(phone: str) -> str:
-    # ponytail: store ALL digits, not just last 10 (last 10 loses country code, +1 for USA)
-    return "".join(c for c in str(phone) if c.isdigit())
+    # Comparar por los ÚLTIMOS 10 dígitos = número nacional (RD/US: +1 809/829/849 + 7).
+    # Robusto ante que un lado traiga el código país (+1) y el otro no; se aplica a AMBOS
+    # lados en _cita_matches, así 18099790205 y 8099790205 matchean igual.
+    # ponytail: NO usar "todos los dígitos" — regresa a fallar cuando las longitudes difieren.
+    digits = "".join(c for c in str(phone) if c.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
 
 
 # ---------------------------------------------------------------------------
