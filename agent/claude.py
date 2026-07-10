@@ -241,7 +241,8 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
             messages=messages,
             tools=OPENAI_TOOLS,
             tool_choice="auto",
-            timeout=60
+            timeout=60,
+            max_tokens=8192
         )
 
         msg = response.choices[0].message
