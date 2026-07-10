@@ -188,19 +188,28 @@ def find_upcoming(cedula: str = "", phone: str = "", nombre: str = "", start_iso
               if (d := start + timedelta(days=i)).weekday() != 6]  # 6 = domingo
 
     def _match_day(date_iso: str):
+        """(cita_encontrada, error). Un fallo de un día NO se traga: se reporta arriba, porque
+        'no pude leer la agenda' y 'el paciente no tiene cita' NO son lo mismo."""
         try:
             for cita in get_agenda_day(date_iso, loc):
                 if _cita_matches(cita, target_doc, target_phone, target_name):
-                    return (date_iso, cita)
-        except Exception:
-            return None
-        return None
+                    return (cita, None)
+        except Exception as e:
+            return (None, e)
+        return (None, None)
 
+    errores = []
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         # ex.map preserva el orden de `fechas` (ascendente): la primera coincidencia = la más temprana.
-        for res in ex.map(_match_day, fechas):
-            if res:
-                return res[1]
+        for cita, err in ex.map(_match_day, fechas):
+            if cita:
+                return cita
+            if err:
+                errores.append(err)
+    # Si NINGÚN día se pudo leer (credenciales, API caída), la búsqueda no concluyó nada:
+    # devolver None diría "no tiene cita" y sería mentira. Que reviente y suba el error real.
+    if errores and len(errores) == len(fechas):
+        raise errores[0]
     return None
 
 

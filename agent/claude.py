@@ -114,13 +114,14 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "buscar_cita_dentidesk",
-            "description": "LECTURA de la agenda real de Dentidesk. Busca si el paciente ya tiene una cita en un día concreto, por cédula o teléfono. Úsalo para saber si es paciente recurrente o ver los datos de su cita.",
+            "description": "LECTURA de la agenda real de Dentidesk. Busca si el paciente ya tiene una cita en un día concreto, por cédula, teléfono o nombre. Úsalo para saber si es paciente recurrente o ver los datos de su cita. IMPORTANTE: si la cita es para OTRA persona (un familiar), el teléfono/cédula del que escribe NO va a coincidir — pasa SIEMPRE el 'nombre' completo del paciente (nombre y apellido) para poder encontrarla.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "fecha_iso": {"type": "string", "description": "Fecha a consultar en formato YYYY-MM-DD"},
                     "cedula": {"type": "string", "description": "Cédula del paciente (opcional)"},
                     "telefono": {"type": "string", "description": "Teléfono del paciente (opcional)"},
+                    "nombre": {"type": "string", "description": "Nombre y apellido del paciente (opcional). Imprescindible para citas de terceros/familiares. Requiere al menos nombre + apellido."},
                     "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina (default arroyo_hondo)"}
                 },
                 "required": ["fecha_iso"]
