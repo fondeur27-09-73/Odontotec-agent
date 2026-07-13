@@ -1,0 +1,24 @@
+# El Dockerfile hace `COPY . .`: sin esta lista, TODO lo que esté en la carpeta entra a la imagen.
+# Construir en una PC de desarrollo horneaba el .env y las capturas de .playwright-mcp/ (que son
+# snapshots de las páginas de env vars de EasyPanel, con las API keys en texto plano) dentro de la
+# imagen. En EasyPanel no pasaba porque construye desde un clon de git, pero la imagen no debe
+# depender de dónde se construya.
+.env
+.env.*
+!.env.example
+.playwright-mcp/
+*.png
+*.mp4
+*.webm
+
+# OJO: .git NO se excluye a propósito — /health lee .git/HEAD para reportar el commit desplegado
+# (_git_commit() en main.py). Sin él, verificar qué código corre vuelve a depender de los logs.
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+dd_profile/
+scripts/_out/
+skill-observations/

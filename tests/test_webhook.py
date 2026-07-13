@@ -116,3 +116,13 @@ def test_fallo_leyendo_historial_no_deja_contestar_con_amnesia():
         mock_agent.assert_not_called()          # nunca corre con historial vacío falso
         mock_send.assert_called_once()          # pero al paciente se le responde algo
         assert "momento" in mock_send.call_args.args[1].lower()
+
+
+def test_health_reporta_el_commit_desplegado():
+    # Un contenedor puede estar vivo y sano corriendo código VIEJO (deploy desde la rama
+    # equivocada). "status: ok" no distingue ese caso — solo se nota cuando algo falla y el
+    # arreglo que creías tener no está. El commit hace el deploy verificable con un curl.
+    body = client.get("/health").json()
+    assert body["status"] == "ok"
+    assert body["commit"]                       # nunca vacío
+    assert body["commit"] != "desconocido"      # .git debe llegar al contenedor (ver .dockerignore)

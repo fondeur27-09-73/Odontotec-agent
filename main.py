@@ -83,7 +83,11 @@ app = FastAPI(title="Odontotec Agent", lifespan=lifespan)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # Devuelve el commit desplegado, no solo "ok". Un contenedor puede estar vivo y sano corriendo
+    # código VIEJO (deploy desde la rama equivocada): el síntoma es idéntico al de un deploy correcto
+    # y solo se nota cuando algo falla y el arreglo que creías tener no está. Verificar el deploy
+    # requería leer los logs de EasyPanel a mano; ahora se comprueba con un curl.
+    return {"status": "ok", "commit": _git_commit(), "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
 
 def _build_history(conv_id: int) -> list[dict]:
     from integrations.chatwoot import get_conv_messages

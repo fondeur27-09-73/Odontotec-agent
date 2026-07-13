@@ -17,7 +17,7 @@ def test_health():
     client = TestClient(app)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json()["status"] == "ok"
 
 
 def test_button_action_reconoce_botones_cortos():
