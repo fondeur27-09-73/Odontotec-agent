@@ -292,6 +292,17 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
                     "content": str(result)
                 })
         else:
-            return msg.content or ""
+            text = (msg.content or "").strip()
+            # Un modelo de razonamiento (gpt-5.5) puede agotar max_tokens PENSANDO y devolver
+            # content vacío con finish_reason='length': sin excepción y sin error. Devolver "" ahí
+            # dejaba al paciente sin respuesta y sin rastro en logs — el mismo silencio del 402.
+            # Que reviente: _process_message lo loguea y le avisa al paciente.
+            if not text:
+                raise RuntimeError(
+                    f"el modelo {model!r} no devolvió texto "
+                    f"(finish_reason={response.choices[0].finish_reason!r}) — "
+                    f"si es 'length', max_tokens se agotó razonando"
+                )
+            return text
 
     return "Con gusto. Permítame un momento para ayudarle con su solicitud."

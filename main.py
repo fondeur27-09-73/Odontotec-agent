@@ -104,11 +104,11 @@ def _build_history(conv_id: int) -> list[dict]:
     return history[-MAX_HISTORY:]
 
 async def _process_message(conv_id: int, phone: str, content: str):
+    from integrations.chatwoot import send_message, is_bot_off
+    from agent.claude import run_agent
+
     logger.info(f"_process_message start conv={conv_id} phone={phone} content={content!r}")
     try:
-        from integrations.chatwoot import send_message, is_bot_off
-        from agent.claude import run_agent
-
         async with _conv_lock(conv_id):
             # Conversación escalada a humano (label bot-off): Carla NO contesta encima del agente
             # humano. Sin este chequeo, escalate_to_human ponía el label pero el webhook seguía
@@ -126,7 +126,22 @@ async def _process_message(conv_id: int, phone: str, content: str):
             send_message(conv_id, response_text)
             logger.info(f"_process_message sent conv={conv_id}")
     except Exception as e:
-        logger.error(f"Error processing message conv={conv_id} phone={phone}: {e}", exc_info=True)
+        # Un fallo aquí (LLM sin saldo -> 402, timeout, daemon caído, respuesta vacía del modelo)
+        # moría en un logger.error mientras el webhook ya había contestado 200: por fuera todo se
+        # veía sano y Carla simplemente no hablaba. Dos días de depuración a ciegas (402 de
+        # OpenRouter, 2026-07-13). Ahora: CRITICAL con el status HTTP si lo hay, y el paciente
+        # recibe una respuesta en vez de quedarse hablando solo.
+        status = getattr(e, "status_code", None)
+        logger.critical(
+            f"_process_message FALLÓ conv={conv_id} phone={phone} status={status}: {e}",
+            exc_info=True,
+        )
+        try:
+            send_message(conv_id, "Permítame un momento, por favor. Enseguida le atiendo.")
+        except Exception as notify_err:
+            logger.critical(
+                f"_process_message tampoco pudo avisarle al paciente conv={conv_id}: {notify_err}"
+            )
 
 def _is_incoming(message_type) -> bool:
     return message_type == 0 or message_type == "incoming"

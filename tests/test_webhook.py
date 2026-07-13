@@ -84,3 +84,19 @@ def test_processes_message():
         resp = client.post("/webhook", json=PAYLOAD)
         assert resp.json()["status"] == "ok"
         mock_send.assert_called_once_with(42, "Hola, soy Carla.")
+
+
+def test_fallo_del_llm_le_avisa_al_paciente_en_vez_de_dejarlo_hablando_solo():
+    # El 402 de OpenRouter (sin saldo) moría en un logger.error mientras el webhook ya había
+    # contestado 200: Carla quedaba muda y por fuera todo se veía sano (2026-07-13). Cualquier
+    # fallo de run_agent debe responderle algo al paciente.
+    with patch("integrations.chatwoot.get_labels", return_value=[]), \
+         patch("integrations.chatwoot.get_conv_messages", return_value=[]), \
+         patch("agent.claude.run_agent", side_effect=RuntimeError("402 sin saldo")), \
+         patch("integrations.chatwoot.send_message") as mock_send:
+        resp = client.post("/webhook", json=PAYLOAD)
+        assert resp.json()["status"] == "ok"
+        mock_send.assert_called_once()
+        conv_id, texto = mock_send.call_args.args
+        assert conv_id == 42
+        assert "momento" in texto.lower()

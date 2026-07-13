@@ -163,3 +163,20 @@ def test_escalate_bloqueado_tras_fallo_de_escritura_sin_pedido_humano():
         assert [c.args[0] for c in mock_tool.call_args_list] == [
             "reagendar_cita_dentidesk", "reagendar_cita_dentidesk"]
         assert "confirmo" in result.lower()
+
+
+def test_run_agent_respuesta_vacia_revienta_en_vez_de_devolver_vacio():
+    # Un modelo de razonamiento (gpt-5.5) puede agotar max_tokens PENSANDO y devolver content
+    # vacío con finish_reason='length', sin excepción. Devolver "" dejaba al paciente sin
+    # respuesta y sin rastro: el mismo silencio del 402 de OpenRouter (2026-07-13).
+    import pytest
+    msg = MagicMock()
+    msg.tool_calls = None
+    msg.content = ""
+    resp = MagicMock()
+    resp.choices = [MagicMock(message=msg, finish_reason="length")]
+    with patch("agent.claude._get_client") as mock_fn:
+        mock_fn.return_value.chat.completions.create.return_value = resp
+        from agent.claude import run_agent
+        with pytest.raises(RuntimeError, match="no devolvió texto"):
+            run_agent([{"role": "user", "content": "Hola"}], 42)

@@ -5,3 +5,8 @@ __pycache__/
 .venv/
 venv/
 scripts/_out/
+.claude/
+# Capturas de Playwright: incluyen snapshots de las páginas de env vars de EasyPanel,
+# con las API keys en texto plano. Nunca deben entrar al repo.
+.playwright-mcp/
+*.png
