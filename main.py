@@ -87,10 +87,11 @@ def health():
 
 def _build_history(conv_id: int) -> list[dict]:
     from integrations.chatwoot import get_conv_messages
-    try:
-        msgs = get_conv_messages(conv_id)
-    except Exception:
-        return []
+    # Si Chatwoot falla al devolver el historial, el fallo SUBE. Antes se tragaba y se devolvía []:
+    # Carla seguía contestando pero con amnesia total (sin nombre, sin cédula, sin lo ya acordado),
+    # y podía duplicar una cita o contradecir lo dicho. Peor que callarse, y sin rastro en logs.
+    # Ahora cae en el handler de _process_message: CRITICAL en el log y el paciente recibe aviso.
+    msgs = get_conv_messages(conv_id)
     history = []
     for m in msgs:
         mt = m.get("message_type")

@@ -100,3 +100,19 @@ def test_fallo_del_llm_le_avisa_al_paciente_en_vez_de_dejarlo_hablando_solo():
         conv_id, texto = mock_send.call_args.args
         assert conv_id == 42
         assert "momento" in texto.lower()
+
+
+def test_fallo_leyendo_historial_no_deja_contestar_con_amnesia():
+    # _build_history se tragaba el fallo de Chatwoot y devolvía []: Carla contestaba sin nombre,
+    # sin cédula y sin lo ya acordado — podía duplicar una cita. Peor que callarse, y sin rastro.
+    # Ahora el fallo sube: el paciente recibe aviso y run_agent NO corre con historial falso.
+    with patch("integrations.chatwoot.get_labels", return_value=[]), \
+         patch("integrations.chatwoot.get_conv_messages",
+               side_effect=RuntimeError("401 token vencido")), \
+         patch("agent.claude.run_agent") as mock_agent, \
+         patch("integrations.chatwoot.send_message") as mock_send:
+        resp = client.post("/webhook", json=PAYLOAD)
+        assert resp.json()["status"] == "ok"
+        mock_agent.assert_not_called()          # nunca corre con historial vacío falso
+        mock_send.assert_called_once()          # pero al paciente se le responde algo
+        assert "momento" in mock_send.call_args.args[1].lower()
