@@ -5,7 +5,21 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from agent.tool_handlers import _to_24h, _resolve_doctor, handle_tool
-from integrations.dentidesk_playwright import _split_time_24h
+from integrations.dentidesk_playwright import _split_time_24h, _rut_field
+
+
+# --- _rut_field: cédula dominicana con guion rompe el campo RUT chileno de Dentidesk ---
+
+@pytest.mark.parametrize("cedula,expected", [
+    ("0310277809-2", "03102778092"),   # el caso real que no guardaba (borde rojo)
+    ("031-0277809-2", "03102778092"),  # formato dominicano completo
+    ("031 0277809 2", "03102778092"),  # con espacios
+    ("03102778092", "03102778092"),    # ya limpia -> igual
+    ("", "1-9"),                        # sin cédula -> placeholder de Dentidesk
+    ("  ", "1-9"),                      # solo espacios -> placeholder
+])
+def test_rut_field(cedula, expected):
+    assert _rut_field(cedula) == expected
 
 
 # --- _to_24h: lo que mande el modelo -> 'HH:MM' 24h ---

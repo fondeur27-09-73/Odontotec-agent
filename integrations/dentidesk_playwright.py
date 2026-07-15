@@ -53,6 +53,14 @@ WEB_PASS = os.getenv("DENTIDESK_WEB_PASS", "")
 HEADLESS = os.getenv("DENTIDESK_PW_HEADLESS", "1").lower() in ("1", "true", "yes")
 
 
+def _rut_field(cedula: str) -> str:
+    """#rut es un campo RUT chileno: una cédula dominicana con guion (ej '0310277809-2') lo pone
+    en rojo y NO deja guardar la cita; sin el guion ('03102778092') sí guarda (verificado en vivo
+    2026-07-16). Dejamos solo dígitos. Cédula vacía -> '1-9', el placeholder que el propio
+    Dentidesk sugiere en el formulario."""
+    return "".join(c for c in cedula if c.isdigit()) or "1-9"
+
+
 def _require_writes_enabled():
     if os.getenv("DENTIDESK_ALLOW_WRITES", "").lower() not in ("1", "true", "yes"):
         raise RuntimeError(
@@ -491,7 +499,7 @@ def create_appointment(
             _wait_doctors_loaded(page)
             _set_patient_name_fields(page, patient_name)
             _fill_cita_form(
-                page, rut=cedula or "1-9", fonocel=phone, email="", sucursal=sucursal,
+                page, rut=_rut_field(cedula), fonocel=phone, email="", sucursal=sucursal,
                 doctor_label=doctor_label, motivo_label=procedimiento, duracion_min=30,
             )
             # Asegura fecha/hora exactas (open_modal_cita ya las precarga, esto es redundante a
