@@ -12,7 +12,10 @@ if [ -z "$DAEMON_VNC_PASSWORD" ]; then
   exit 1
 fi
 
-Xvfb :99 -screen 0 1280x800x24 &
+# 1920x1080: pantalla virtual grande para que el reCAPTCHA se vea claro por VNC (era 1280x800,
+# muy chico). Solo importa las pocas veces que haya que loguear a mano; lo normal es que la
+# cookie restaurada (DENTIDESK_COOKIES_JSON / cookies.json) salte el login por completo.
+Xvfb :99 -screen 0 1920x1080x24 &
 sleep 1
 
 x11vnc -display :99 -forever -shared -rfbport 5900 -passwd "$DAEMON_VNC_PASSWORD" &

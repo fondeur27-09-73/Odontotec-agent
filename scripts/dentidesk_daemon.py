@@ -16,6 +16,7 @@ REGLA (exploracion manual): este navegador es para EXPLORAR (click en lo que sea
 pacientes, doctores, intentar agendar/reagendar hasta el formulario). NUNCA pulsar Guardar /
 cambiar status real fuera de los scripts de escritura ya auditados.
 """
+import json
 import os
 import sys
 import time
@@ -26,9 +27,45 @@ os.makedirs(OUT, exist_ok=True)
 # (ej /data/dd_profile) para que el login sobreviva a un redeploy -- igual que odontotec-data
 # para el SQLite. En local usa la carpeta de siempre bajo scripts/_out.
 PROFILE = os.getenv("DENTIDESK_PROFILE_DIR", os.path.join(OUT, "dd_profile"))
+# La cookie de sesion PHP de Dentidesk es una *session cookie*: Chrome NO la escribe a disco
+# aunque el perfil viva en el volumen, asi que muere cuando el contenedor reinicia y pide
+# reCAPTCHA de nuevo. La volcamos a un JSON en el mismo volumen (/data/cookies.json en prod) y
+# la restauramos al arrancar. Como la sesion server-side no expira (regla del cliente), revive
+# el login sin captcha.
+COOKIES = os.getenv("DENTIDESK_COOKIES_FILE", os.path.join(os.path.dirname(PROFILE), "cookies.json"))
 LOGIN_URL = "https://app.dentidesk.com/home.php"
 CDP_PORT = 9222
 API_PORT = int(os.getenv("DENTIDESK_DAEMON_API_PORT", "8100"))
+
+
+def _load_cookies(ctx):
+    # Prioridad 1: env var DENTIDESK_COOKIES_JSON (el JSON pegado directo en EasyPanel -> un solo
+    # paso, sin terminal del contenedor). Prioridad 2: archivo en el volumen. Cualquiera revive la
+    # sesion sin captcha porque la sesion server-side de Dentidesk no expira.
+    raw = os.getenv("DENTIDESK_COOKIES_JSON", "").strip()
+    if raw:
+        try:
+            ctx.add_cookies(json.loads(raw))
+            print(">>> Cookies restauradas desde DENTIDESK_COOKIES_JSON (env var)", flush=True)
+            return
+        except Exception as ex:
+            print(f">>> DENTIDESK_COOKIES_JSON invalido ({ex}); intento con el archivo.", flush=True)
+    if not os.path.exists(COOKIES):
+        return
+    try:
+        ctx.add_cookies(json.load(open(COOKIES, encoding="utf-8")))
+        print(f">>> Cookies restauradas desde {COOKIES}", flush=True)
+    except Exception as ex:
+        print(f">>> No se pudieron restaurar cookies ({ex}); se seguira con login normal.", flush=True)
+
+
+def _save_cookies(ctx):
+    try:
+        os.makedirs(os.path.dirname(COOKIES), exist_ok=True)
+        json.dump(ctx.cookies(), open(COOKIES, "w", encoding="utf-8"))
+        print(f">>> Cookies guardadas en {COOKIES}", flush=True)
+    except Exception as ex:
+        print(f">>> No se pudieron guardar cookies ({ex}).", flush=True)
 
 
 def _env():
@@ -54,6 +91,7 @@ def main():
             args=[f"--remote-debugging-port={CDP_PORT}", "--start-maximized", "--new-window"],
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        _load_cookies(ctx)  # restaurar sesion antes del goto -- puede saltarse el login por completo
         page.bring_to_front()
         page.goto(LOGIN_URL, wait_until="networkidle")
         page.bring_to_front()
@@ -71,9 +109,12 @@ def main():
                                        timeout=180000)
                 print(f">>> LOGIN OK — captcha+login tardo {time.perf_counter() - t_captcha:.1f}s",
                       flush=True)
+                _save_cookies(ctx)  # persistir la cookie de sesion recien obtenida al volumen
             except Exception:
                 print("No se detecto login (timeout). Daemon sigue corriendo igual; reintenta "
                       "manualmente en la ventana.", flush=True)
+        else:
+            _save_cookies(ctx)  # ya logueado (cookie restaurada o perfil): re-guardar por si rotó
         try:
             # La Agenda de Dentidesk mantiene trafico de red constante (polling/websockets) que
             # rara vez llega a "networkidle" -- sin este try/except, el timeout tumbaba TODO el
