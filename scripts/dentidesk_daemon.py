@@ -39,24 +39,27 @@ API_PORT = int(os.getenv("DENTIDESK_DAEMON_API_PORT", "8100"))
 
 
 def _load_cookies(ctx):
-    # Prioridad 1: env var DENTIDESK_COOKIES_JSON (el JSON pegado directo en EasyPanel -> un solo
-    # paso, sin terminal del contenedor). Prioridad 2: archivo en el volumen. Cualquiera revive la
-    # sesion sin captcha porque la sesion server-side de Dentidesk no expira.
+    # Prioridad 1: archivo /data/cookies.json — lo reescribe _save_cookies en CADA login exitoso,
+    # asi que siempre trae la cookie MAS reciente y, clave, generada DENTRO del contenedor (misma
+    # IP/User-Agent del VPS). Si Dentidesk ata la sesion a la IP (hipotesis 2026-07-16), solo una
+    # cookie nacida aqui aguanta -- una pegada desde otra maquina la rechaza.
+    # Prioridad 2 (fallback): env var DENTIDESK_COOKIES_JSON. Util solo si viniera de una sesion
+    # del mismo origen; NO debe tapar al archivo (bug corregido 2026-07-16: antes iba primero y
+    # bloqueaba la cookie buena del volumen).
+    if os.path.exists(COOKIES):
+        try:
+            ctx.add_cookies(json.load(open(COOKIES, encoding="utf-8")))
+            print(f">>> Cookies restauradas desde {COOKIES}", flush=True)
+            return
+        except Exception as ex:
+            print(f">>> {COOKIES} invalido ({ex}); intento con la env var.", flush=True)
     raw = os.getenv("DENTIDESK_COOKIES_JSON", "").strip()
     if raw:
         try:
             ctx.add_cookies(json.loads(raw))
             print(">>> Cookies restauradas desde DENTIDESK_COOKIES_JSON (env var)", flush=True)
-            return
         except Exception as ex:
-            print(f">>> DENTIDESK_COOKIES_JSON invalido ({ex}); intento con el archivo.", flush=True)
-    if not os.path.exists(COOKIES):
-        return
-    try:
-        ctx.add_cookies(json.load(open(COOKIES, encoding="utf-8")))
-        print(f">>> Cookies restauradas desde {COOKIES}", flush=True)
-    except Exception as ex:
-        print(f">>> No se pudieron restaurar cookies ({ex}); se seguira con login normal.", flush=True)
+            print(f">>> DENTIDESK_COOKIES_JSON invalido ({ex}); se seguira con login normal.", flush=True)
 
 
 def _save_cookies(ctx):
