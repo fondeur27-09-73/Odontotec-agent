@@ -6,6 +6,23 @@ import pytest
 
 from agent.tool_handlers import _to_24h, _resolve_doctor, handle_tool
 from integrations.dentidesk_playwright import _split_time_24h, _rut_field
+from scripts.dentidesk_daemon import _wait_until_dead
+
+
+# --- _wait_until_dead: el daemon debe salir cuando Chrome se muere, no dormir para siempre ---
+
+def test_wait_until_dead_vuelve_cuando_muere_el_navegador():
+    page = MagicMock()
+    page.is_closed.side_effect = [False, False, True]  # vive 2 vueltas, luego muere
+    _wait_until_dead(page, poll=0)
+    assert page.is_closed.call_count == 3
+
+
+def test_wait_until_dead_no_bloquea_si_ya_esta_muerto():
+    page = MagicMock()
+    page.is_closed.return_value = True
+    _wait_until_dead(page, poll=0)
+    assert page.is_closed.call_count == 1
 
 
 # --- _rut_field: cédula dominicana con guion rompe el campo RUT chileno de Dentidesk ---

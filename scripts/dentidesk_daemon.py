@@ -71,6 +71,19 @@ def _save_cookies(ctx):
         print(f">>> No se pudieron guardar cookies ({ex}).", flush=True)
 
 
+def _wait_until_dead(page, poll=5):
+    """Bloquea mientras el navegador viva; devuelve cuando muere.
+
+    Chrome se muere solo (crash/OOM: evidencia 2026-07-16, 4 procesos `[chrome] <defunct>` con el
+    daemon vivo desde el dia anterior). Antes esto era un `while True: sleep(5)` ciego: el proceso
+    seguia dormido un dia entero con la ventana muerta (pantalla negra en VNC) y la API contestando
+    contra un navegador cadaver, sin UNA linea en el log. El que llama sale con exit 1 -> el
+    contenedor reinicia -> vuelve a abrir Chrome restaurando la cookie de /data/cookies.json.
+    """
+    while not page.is_closed():
+        time.sleep(poll)
+
+
 def _env():
     # En produccion (contenedor "daemon") EasyPanel inyecta las env vars directo al proceso, sin
     # archivo .env -- solo local (exploracion manual) tiene ese archivo. os.environ ya trae ambos casos.
@@ -89,9 +102,16 @@ def main():
     os.makedirs(PROFILE, exist_ok=True)
     e = _env()
     with sync_playwright() as p:
+        # Este print separa "python no corre" de "python colgado abriendo Chrome": si sale este y
+        # no sale el siguiente, el launch se quedo trabado (perfil bloqueado, Chrome ausente, etc).
+        print(f">>> Abriendo Chrome (perfil {PROFILE}, DISPLAY={os.getenv('DISPLAY')})...", flush=True)
         ctx = p.chromium.launch_persistent_context(
             PROFILE, headless=False, slow_mo=100, channel="chrome",
-            args=[f"--remote-debugging-port={CDP_PORT}", "--start-maximized", "--new-window"],
+            args=[f"--remote-debugging-port={CDP_PORT}", "--start-maximized", "--new-window",
+                  # Docker le da 64MB a /dev/shm; Chrome lo agota y se estrella (sospecha de por
+                  # que aparecieron 4 `[chrome] <defunct>` con el daemon vivo, 2026-07-16). Con
+                  # esto usa /tmp en vez de /dev/shm. Inofensivo si la causa resulta ser otra.
+                  "--disable-dev-shm-usage"],
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         _load_cookies(ctx)  # restaurar sesion antes del goto -- puede saltarse el login por completo
@@ -147,18 +167,19 @@ def main():
             )
             print("Navegador se queda abierto (API en subproceso aparte).", flush=True)
             try:
-                while True:
-                    time.sleep(5)
+                _wait_until_dead(page)
             except KeyboardInterrupt:
                 print("Cerrando daemon (Ctrl+C).", flush=True)
-            return
+                return
+            print(">>> NAVEGADOR MUERTO. Salgo con exit 1 para que el contenedor reinicie y lo "
+                  "vuelva a abrir con la cookie restaurada.", flush=True)
+            sys.exit(1)
 
         print("Navegador se queda abierto. Usa scripts/dentidesk_attach.py <step> para explorar.",
               flush=True)
         print("Para detenerlo: Ctrl+C aqui, o cierra la ventana a mano.", flush=True)
         try:
-            while True:
-                time.sleep(5)
+            _wait_until_dead(page)
         except KeyboardInterrupt:
             print("Cerrando daemon (Ctrl+C).", flush=True)
 
