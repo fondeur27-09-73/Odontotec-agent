@@ -4,6 +4,7 @@ from datetime import datetime
 from openai import OpenAI
 from agent.prompts import SYSTEM_PROMPT
 from agent.tool_handlers import handle_tool
+from agent import metrics
 
 logger = logging.getLogger("odontotec.agent")
 
@@ -260,6 +261,7 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
                         f"run_agent conv={conversation_id}: escalate_to_human BLOQUEADO "
                         f"(el paciente no pidió un humano explícitamente — Carla debe insistir)"
                     )
+                    metrics.increment("escalate_blocked")
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -305,4 +307,7 @@ def run_agent(history: list[dict], conversation_id: int, patient_phone: str = ""
                 )
             return text
 
+    # Llegar aquí = MAX_ITERATIONS sin que el modelo cerrara nada. El paciente recibe una frase
+    # neutra y por fuera parece atendido; el contador es lo único que lo delata.
+    metrics.increment("iterations_exhausted")
     return "Con gusto. Permítame un momento para ayudarle con su solicitud."

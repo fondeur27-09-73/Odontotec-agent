@@ -67,6 +67,27 @@ def _within_clinic_hours(fecha_iso: str, time_str: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _fecha_no_pasada(fecha_iso: str) -> tuple[bool, str]:
+    """Bloquea agendar/reagendar hacia una fecha que ya pasó. Dentidesk lo acepta sin chistar y
+    deshacerlo es a mano. El modelo se equivoca de año o arrastra la fecha vieja al reagendar.
+    Lenient igual que _within_clinic_hours: si no parsea, deja pasar."""
+    if not fecha_iso:
+        return True, ""
+    try:
+        from zoneinfo import ZoneInfo
+        hoy = datetime.now(ZoneInfo(os.getenv("TIMEZONE", "America/Santo_Domingo"))).date()
+    except Exception:
+        hoy = datetime.now().date()
+    try:
+        fecha = datetime.strptime(fecha_iso[:10], "%Y-%m-%d").date()
+    except Exception:
+        return True, ""
+    if fecha < hoy:
+        return False, (f"La fecha {fecha_iso} ya pasó (hoy es {hoy:%Y-%m-%d}). "
+                       f"Pídale al paciente una fecha futura.")
+    return True, ""
+
+
 # Agenda real = Dentidesk. Lectura por API (buscar/confirmar). Crear y mover citas se hace por
 # Playwright sobre la UI web (la API no lo permite). Toda ESCRITURA está bajo el candado
 # DENTIDESK_ALLOW_WRITES y se ejercita solo en el campo de simulación autorizado.
@@ -113,8 +134,11 @@ def _agendar_cita_dentidesk(
     fecha_iso: str = "",
     sucursal: str = "arroyo_hondo",
 ) -> dict:
-    """ESCRITURA (UI Playwright): crea una cita NUEVA en Dentidesk. Backstop de horario antes de
-    tocar nada. Bajo candado DENTIDESK_ALLOW_WRITES (no opera fuera del campo de simulación)."""
+    """ESCRITURA (UI Playwright): crea una cita NUEVA en Dentidesk. Backstop de fecha/horario antes
+    de tocar nada. Bajo candado DENTIDESK_ALLOW_WRITES (no opera fuera del campo de simulación)."""
+    ok, msg = _fecha_no_pasada(fecha_iso)
+    if not ok:
+        return {"success": False, "error": "fecha_pasada", "message": msg}
     ok, msg = _within_clinic_hours(fecha_iso, time)
     if not ok:
         return {"success": False, "error": "fuera_de_horario", "message": msg}
@@ -175,6 +199,9 @@ def _reagendar_cita_dentidesk(
     specialty (la nueva especialidad del sistema) y/o procedimiento (el tratamiento en palabras).
     specialty se resuelve al doctor nuevo (igual que en agendar) y se cambia en el modal junto con
     el motivo — el modal de editar cita es el mismo que el de crear."""
+    ok, msg = _fecha_no_pasada(fecha_iso)
+    if not ok:
+        return {"success": False, "error": "fecha_pasada", "message": msg}
     ok, msg = _within_clinic_hours(fecha_iso, time)
     if not ok:
         return {"success": False, "error": "fuera_de_horario", "message": msg}

@@ -88,11 +88,14 @@ def _inbox_id() -> int:
     return int(inbox)
 
 
-def find_or_create_contact(phone: str, name: str = "") -> tuple[int, str]:
+def find_or_create_contact(phone: str, name: str = "", inbox_id: int | None = None) -> tuple[int, str]:
     """Devuelve (contact_id, source_id) para el teléfono en el inbox WhatsApp. Crea el contacto
     si no existe. source_id = identificador del contacto dentro del inbox (lo pide crear conversación).
-    phone debe venir en formato E.164 ('+1809...')."""
-    inbox_id = _inbox_id()
+    phone debe venir en formato E.164 ('+1809...').
+
+    inbox_id=None -> CHATWOOT_INBOX_ID (el número de Carla con pacientes). El watchdog pasa su
+    propio inbox para que sus alertas no salgan del número de la clínica."""
+    inbox_id = inbox_id or _inbox_id()
     # Buscar contacto existente por teléfono
     r = httpx.get(f"{_base_url()}/contacts/search", headers=_headers(),
                   params={"q": phone}, timeout=10)
@@ -136,12 +139,14 @@ def _create_conversation(contact_id: int, source_id: str, inbox_id: int) -> int:
 
 
 def send_template(phone: str, params: dict, name: str = "",
-                  template_name: str | None = None) -> int:
+                  template_name: str | None = None, inbox_id: int | None = None) -> int:
     """Manda la plantilla de confirmación al paciente. `params` = {"1":nombre, "2":fecha,
     "3":motivo, "4":hora, "5":sucursal} (variables del cuerpo). Crea contacto+conversación si hace
-    falta. Devuelve conversation_id (para mapear la respuesta del botón). phone en E.164."""
-    inbox_id = _inbox_id()
-    contact_id, source_id = find_or_create_contact(phone, name)
+    falta. Devuelve conversation_id (para mapear la respuesta del botón). phone en E.164.
+
+    inbox_id=None -> CHATWOOT_INBOX_ID (pacientes). Ver find_or_create_contact."""
+    inbox_id = inbox_id or _inbox_id()
+    contact_id, source_id = find_or_create_contact(phone, name, inbox_id=inbox_id)
     conv_id = _create_conversation(contact_id, source_id, inbox_id)
     body = {
         "content": "",

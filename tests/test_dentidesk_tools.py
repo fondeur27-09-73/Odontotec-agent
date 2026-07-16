@@ -1,5 +1,6 @@
 """Tests de Fase 1 (auditoría 2026-07-05): normalización de hora a 24h y mapa especialidad→doctor."""
 import json
+from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -112,10 +113,23 @@ def _sin_agenda_previa(monkeypatch):
     monkeypatch.setattr("agent.tool_handlers.dentidesk.find_by_phone", lambda *a, **k: None)
 
 
+def _proximo(weekday: int) -> str:
+    """Fecha FUTURA más cercana con ese día de la semana (0=lunes … 6=domingo).
+
+    Estos tests traían fechas fijas de julio 2026. Al pasar esas fechas, el guardrail
+    _fecha_no_pasada empezó a rechazarlas — correctamente — y 10 tests reventaron sin que nada
+    del código estuviera mal. Fechas relativas a hoy: no se vuelven a pudrir."""
+    hoy = datetime.now().date()
+    delta = (weekday - hoy.weekday()) % 7 or 7  # 'or 7' -> nunca hoy, siempre futuro
+    return (hoy + timedelta(days=delta)).strftime("%Y-%m-%d")
+
+
+_LUNES, _MARTES, _DOMINGO = _proximo(0), _proximo(1), _proximo(6)
+
 _BASE_ARGS = {
     "patient_name": "Juan Pérez", "patient_phone": "+18091234567",
-    "specialty": "ortodoncia", "day": "lunes 6 de julio",
-    "fecha_iso": "2026-07-06",
+    "specialty": "ortodoncia", "day": "el próximo lunes",
+    "fecha_iso": _LUNES,
 }
 
 
@@ -177,8 +191,8 @@ def test_reagendar_pasa_hora_24h():
     with patch("agent.tool_handlers.dentidesk_playwright.move_appointment",
                return_value={"success": True, "IdAgenda": "999"}) as mock_pw:
         result = json.loads(handle_tool("reagendar_cita_dentidesk", {
-            "id_agenda": "999", "fecha_actual_iso": "2026-07-06",
-            "patient_name": "Juan Pérez", "fecha_iso": "2026-07-07", "time": "4:30 PM",
+            "id_agenda": "999", "fecha_actual_iso": _LUNES,
+            "patient_name": "Juan Pérez", "fecha_iso": _MARTES, "time": "4:30 PM",
         }))
     assert result["success"] is True
     assert mock_pw.call_args.kwargs["nueva_hora"] == "16:30"
@@ -193,8 +207,8 @@ def test_reagendar_con_cambio_de_tratamiento_resuelve_doctor_nuevo():
     with patch("agent.tool_handlers.dentidesk_playwright.move_appointment",
                return_value={"success": True, "IdAgenda": "999"}) as mock_pw:
         result = json.loads(handle_tool("reagendar_cita_dentidesk", {
-            "id_agenda": "999", "fecha_actual_iso": "2026-07-06", "patient_name": "Juan Pérez",
-            "doctor": "Cedano", "fecha_iso": "2026-07-07", "time": "10:00 AM",
+            "id_agenda": "999", "fecha_actual_iso": _LUNES, "patient_name": "Juan Pérez",
+            "doctor": "Cedano", "fecha_iso": _MARTES, "time": "10:00 AM",
             "specialty": "ortodoncia", "procedimiento": "Brackets",
         }))
     assert result["success"] is True
@@ -207,8 +221,8 @@ def test_reagendar_con_cambio_de_tratamiento_resuelve_doctor_nuevo():
 def test_reagendar_especialidad_desconocida_no_llama_playwright():
     with patch("agent.tool_handlers.dentidesk_playwright.move_appointment") as mock_pw:
         result = json.loads(handle_tool("reagendar_cita_dentidesk", {
-            "id_agenda": "999", "fecha_actual_iso": "2026-07-06", "patient_name": "Juan Pérez",
-            "fecha_iso": "2026-07-07", "time": "10:00 AM", "specialty": "dermatologia",
+            "id_agenda": "999", "fecha_actual_iso": _LUNES, "patient_name": "Juan Pérez",
+            "fecha_iso": _MARTES, "time": "10:00 AM", "specialty": "dermatologia",
         }))
     assert result["success"] is False
     assert result["error"] == "doctor_no_mapeado"
@@ -221,7 +235,7 @@ def test_agendar_idempotente_si_ya_hay_cita_ese_dia(monkeypatch):
     monkeypatch.setattr(
         "agent.tool_handlers.dentidesk.find_by_phone",
         lambda *a, **k: {"IdAgenda": "555", "PatientName": "Juan Pérez",
-                         "Date": "2026-07-06", "time": "10:00"},
+                         "Date": _LUNES, "time": "10:00"},
     )
     with patch("agent.tool_handlers.dentidesk_playwright.create_appointment") as mock_pw:
         result = json.loads(handle_tool("agendar_cita_dentidesk",
@@ -249,10 +263,33 @@ def test_agendar_fuera_de_horario_gana_antes_que_hora_invalida():
     # Domingo: bloquea por horario aunque la hora venga bien formada.
     with patch("agent.tool_handlers.dentidesk_playwright.create_appointment") as mock_pw:
         result = json.loads(handle_tool("agendar_cita_dentidesk",
-                                        {**_BASE_ARGS, "fecha_iso": "2026-07-05",
-                                         "time": "10:00 AM"}))  # 2026-07-05 = domingo
+                                        {**_BASE_ARGS, "fecha_iso": _DOMINGO,
+                                         "time": "10:00 AM"}))
     assert result["success"] is False
     assert result["error"] == "fuera_de_horario"
+    mock_pw.assert_not_called()
+
+
+def test_agendar_fecha_pasada_no_llama_playwright():
+    """Dentidesk acepta una cita en el pasado sin chistar y deshacerlo es a mano."""
+    ayer = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
+    with patch("agent.tool_handlers.dentidesk_playwright.create_appointment") as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk",
+                                        {**_BASE_ARGS, "fecha_iso": ayer, "time": "10:00 AM"}))
+    assert result["success"] is False
+    assert result["error"] == "fecha_pasada"
+    mock_pw.assert_not_called()
+
+
+def test_reagendar_fecha_pasada_no_llama_playwright():
+    ayer = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
+    with patch("agent.tool_handlers.dentidesk_playwright.move_appointment") as mock_pw:
+        result = json.loads(handle_tool("reagendar_cita_dentidesk", {
+            "id_agenda": "999", "fecha_actual_iso": _LUNES, "patient_name": "Juan Pérez",
+            "fecha_iso": ayer, "time": "10:00 AM",
+        }))
+    assert result["success"] is False
+    assert result["error"] == "fecha_pasada"
     mock_pw.assert_not_called()
 
 

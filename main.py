@@ -73,6 +73,18 @@ async def lifespan(app):
         scheduler = start_scheduler()
     except Exception as e:
         logger.error(f"No se pudo iniciar el scheduler de recordatorios: {e}")
+    # Watchdog: reusa el scheduler de recordatorios (un solo BackgroundScheduler, sin servicio
+    # nuevo). Si los recordatorios no arrancaron, se crea uno propio — la vigilancia no puede
+    # depender de una función que está en pausa hasta la Fase 2.
+    try:
+        from scheduler.watchdog import start_watchdog
+        if scheduler is None:
+            from apscheduler.schedulers.background import BackgroundScheduler
+            scheduler = BackgroundScheduler()
+            scheduler.start()
+        start_watchdog(scheduler)
+    except Exception as e:
+        logger.error(f"No se pudo iniciar el watchdog: {e}")
     try:
         yield
     finally:
@@ -141,6 +153,10 @@ async def _process_message(conv_id: int, phone: str, content: str):
             f"_process_message FALLÓ conv={conv_id} phone={phone} status={status}: {e}",
             exc_info=True,
         )
+        # El watchdog avisa si esto se repite: el paciente recibe "permítame un momento" y por
+        # fuera Carla se ve viva, que es exactamente cómo el 402 pasó dos días sin detectarse.
+        from agent import metrics
+        metrics.increment("agent_failed")
         try:
             send_message(conv_id, "Permítame un momento, por favor. Enseguida le atiendo.")
         except Exception as notify_err:
