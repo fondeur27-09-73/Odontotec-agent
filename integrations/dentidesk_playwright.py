@@ -301,9 +301,36 @@ def _select_sucursal_safe(page, sucursal: str) -> None:
     page.select_option("#sucursal_cita", value=str(sucursal))
 
 
+def _type_rut_recognize(page, rut: str, cap_ms: int = 3000) -> bool:
+    """Teclea la cédula en #rut como un humano y CIERRA la selección con Enter.
+
+    BUG 2026-07-21 (confirmado en VNC): `page.fill("#rut", ...)` planta el value de golpe. Dentidesk
+    nunca dispara el autocompletar que reconoce al paciente existente y llena el oculto #id_paciente,
+    así que trata la cédula como RUT chileno NUEVO, corre el check-digit, la pone en rojo y bloquea el
+    guardado -> el click en #btn_guardar_cita no produce respuesta -> expect_response cuelga 15s -> 502.
+    Un humano teclea y CIERRA la selección con Enter (o click en la fila) -> el paciente carga y guarda.
+    Esto replica ese cierre: press_sequentially teclea de verdad (dispara el evento) y Enter cierra.
+
+    Devuelve True si reconoció un paciente existente (#id_paciente quedó != 0). Para un paciente NUEVO
+    no hay fila que cerrar y devuelve False -> ese caso sigue chocando con la validación de RUT chileno
+    (pendiente aparte, ver CLAUDE.md)."""
+    page.fill("#rut", "")                                  # limpia por si trae algo
+    page.locator("#rut").press_sequentially(rut, delay=30)  # teclea -> dispara autocompletar
+    page.press("#rut", "Enter")                            # cierra la selección (= click en la fila)
+    try:
+        page.wait_for_function(
+            "() => { const el = document.getElementById('id_paciente');"
+            " return el && el.value && el.value !== '0'; }",
+            timeout=cap_ms,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _fill_cita_form(page, *, rut: str, fonocel: str, email: str, sucursal: str,
                      doctor_label: str, motivo_label: str, duracion_min: int) -> None:
-    page.fill("#rut", rut)
+    _type_rut_recognize(page, rut)
     if email:
         page.fill("#email", email)
     if fonocel:
