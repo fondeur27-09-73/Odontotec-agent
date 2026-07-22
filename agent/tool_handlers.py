@@ -123,6 +123,21 @@ def _save_patient(phone: str, name: str, cedula: str = "") -> dict:
     return {"success": True, "patient": {"phone": phone, **saved}}
 
 
+def _cedula_dominicana_ok(cedula: str) -> tuple[bool, str]:
+    """Cédula dominicana = EXACTAMENTE 11 dígitos. Guardrail duro ANTES de escribir a Dentidesk.
+
+    Dentidesk NO valida longitud (probado en vivo 2026-07-22: guardó un paciente con cédula '123',
+    3 dígitos). Sin este candado, una cédula corta o vacía crea una ficha basura imposible de
+    deduplicar, y peor: envenena el autocompletar de #rut, que luego trunca cédulas buenas a ese
+    prefijo (bug '0310'). El límite vive aquí, no en Dentidesk, que acepta cualquier cosa.
+    Devuelve (ok, mensaje_para_el_paciente)."""
+    digits = "".join(c for c in cedula if c.isdigit())
+    if len(digits) == 11:
+        return True, ""
+    return False, ("Para registrar la cita necesito la cédula completa del paciente: son 11 dígitos. "
+                   "¿Me la puede enviar de nuevo, completa?")
+
+
 def _agendar_cita_dentidesk(
     patient_name: str,
     patient_phone: str,
@@ -136,6 +151,9 @@ def _agendar_cita_dentidesk(
 ) -> dict:
     """ESCRITURA (UI Playwright): crea una cita NUEVA en Dentidesk. Backstop de fecha/horario antes
     de tocar nada. Bajo candado DENTIDESK_ALLOW_WRITES (no opera fuera del campo de simulación)."""
+    ok, msg = _cedula_dominicana_ok(cedula)
+    if not ok:
+        return {"success": False, "error": "cedula_invalida", "message": msg}
     ok, msg = _fecha_no_pasada(fecha_iso)
     if not ok:
         return {"success": False, "error": "fecha_pasada", "message": msg}

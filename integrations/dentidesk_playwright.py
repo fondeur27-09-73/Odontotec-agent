@@ -312,8 +312,10 @@ def _type_rut_recognize(page, rut: str, cap_ms: int = 3000) -> bool:
     Esto replica ese cierre: press_sequentially teclea de verdad (dispara el evento) y Enter cierra.
 
     Devuelve True si reconoció un paciente existente (#id_paciente quedó != 0). Para un paciente NUEVO
-    no hay fila que cerrar y devuelve False -> ese caso sigue chocando con la validación de RUT chileno
-    (pendiente aparte, ver CLAUDE.md)."""
+    no hay fila que cerrar y devuelve False -> se guarda como alta nueva. OJO (probado 2026-07-22):
+    Dentidesk NO rechaza la cédula dominicana por "RUT chileno" -- acepta cualquier dígito, sin mínimo
+    ni check-digit (guardó un paciente con '123'). El único bloqueo real es cédula VACÍA. Por eso el
+    guardrail de 11 dígitos vive en el agente (agent/tool_handlers._cedula_dominicana_ok), no aquí."""
     page.fill("#rut", "")                                  # limpia por si trae algo
     page.locator("#rut").press_sequentially(rut, delay=30)  # teclea -> dispara autocompletar
     page.press("#rut", "Enter")                            # cierra la selección (= click en la fila)
@@ -542,8 +544,9 @@ def create_appointment(
             _select_doctor_verified(page, doctor_label)
             # Detecta si la cédula ya pertenece a un paciente registrado: Dentidesk autocompleta el
             # oculto #id_paciente al reconocer la cédula. Si trae valor, el paciente YA existe (no es
-            # alta nueva) — se reporta al caller para que Carla vincule la ficha existente en vez de
-            # intentar crear un duplicado (que el CRM rechaza). Informativo: no bloquea el agendado,
+            # alta nueva) — se reporta al caller. OJO: Dentidesk SÍ permite duplicados (no valida
+            # cédula única, probado 2026-07-22); el enlace a la ficha existente lo hace este mismo
+            # teclear-cédula+Enter de _type_rut_recognize. Informativo: no bloquea el agendado,
             # porque una cita para un paciente existente es válida. Ver memoria
             # dentidesk-prueba-agendado-2026-07-01.
             id_paciente_detectado = (page.input_value("#id_paciente") or "").strip()

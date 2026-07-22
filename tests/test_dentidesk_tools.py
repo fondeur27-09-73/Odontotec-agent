@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from agent.tool_handlers import _to_24h, _resolve_doctor, handle_tool
+from agent.tool_handlers import _to_24h, _resolve_doctor, handle_tool, _cedula_dominicana_ok
 from integrations.dentidesk_playwright import _split_time_24h, _rut_field
 from scripts.dentidesk_daemon import _wait_until_dead
 
@@ -38,6 +38,26 @@ def test_wait_until_dead_no_bloquea_si_ya_esta_muerto():
 ])
 def test_rut_field(cedula, expected):
     assert _rut_field(cedula) == expected
+
+
+# --- _cedula_dominicana_ok: guardrail de 11 dígitos ANTES de escribir a Dentidesk ---
+# (Dentidesk no valida longitud; una cédula corta crea ficha basura y envenena el autocompletar.)
+
+@pytest.mark.parametrize("cedula,ok", [
+    ("03102778092", True),     # 11 dígitos limpios
+    ("031-0277809-2", True),   # 11 dígitos con formato dominicano
+    ("031 0277809 2", True),   # con espacios
+    ("123", False),            # el caso real que Dentidesk sí guardaba (3 dígitos)
+    ("0310", False),           # el prefijo truncado que envenenó el autocompletar
+    ("0310277809", False),     # 10 dígitos: uno de menos
+    ("031027780921", False),   # 12 dígitos: uno de más
+    ("", False),               # vacía
+    ("1-9", False),            # el placeholder de Dentidesk NO pasa el guardrail
+])
+def test_cedula_dominicana_ok(cedula, ok):
+    passed, msg = _cedula_dominicana_ok(cedula)
+    assert passed is ok
+    assert (msg == "") is ok  # rechazo trae mensaje para el paciente; aceptación no
 
 
 # --- _to_24h: lo que mande el modelo -> 'HH:MM' 24h ---
@@ -129,8 +149,18 @@ _LUNES, _MARTES, _DOMINGO = _proximo(0), _proximo(1), _proximo(6)
 _BASE_ARGS = {
     "patient_name": "Juan Pérez", "patient_phone": "+18091234567",
     "specialty": "ortodoncia", "day": "el próximo lunes",
-    "fecha_iso": _LUNES,
+    "fecha_iso": _LUNES, "cedula": "03102778092",  # 11 dígitos: pasa el guardrail de cédula
 }
+
+
+def test_agendar_cedula_corta_no_llama_playwright():
+    """El guardrail de 11 dígitos corta ANTES de tocar Playwright: cédula incompleta -> no escribe."""
+    with patch("agent.tool_handlers.dentidesk_playwright.create_appointment") as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk",
+                                        {**_BASE_ARGS, "cedula": "123", "time": "10:00 AM"}))
+    assert result["success"] is False
+    assert result["error"] == "cedula_invalida"
+    mock_pw.assert_not_called()
 
 
 def test_agendar_hora_invalida_no_llama_playwright():
