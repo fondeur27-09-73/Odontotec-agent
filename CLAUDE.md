@@ -1,6 +1,70 @@
 # CLAUDE.md — Carla Odontotec WhatsApp Agent
 
-**Estado actual:** 2026-07-16 (tarde) | Branch: `feat/dentidesk-integration` (prod construye de ESTA branch — verificado en EasyPanel Source) | Prod = `c2a6b40` | Repo indexado (552 nodos, 1900 edges)
+## 🟢 ARRANCAR AQUÍ — Sesión 2026-07-22 (madrugada): duplicados/RUT RESUELTO EN CÓDIGO
+
+**En una línea:** el experimento VNC del usuario corrigió la causa raíz. El fix son **11 dígitos de
+cédula obligatorios EN EL AGENTE** (commit `fd4c0e4`, pusheado). **Falta:** deploy de `odontotec` +
+e2e tras la limpieza del cliente.
+
+**Lo que el experimento VNC mató (2026-07-22):**
+- El **"Debe especificar un rut/DNI válido" es cédula VACÍA**, NO rechazo de la cédula dominicana por
+  RUT chileno. El usuario creó a mano un paciente con cédula `123` (3 dígitos) y **guardó**: Dentidesk
+  NO valida longitud ni check-digit. → El "2º problema" (cédula RD choca con RUT chileno) **NO EXISTE**.
+- La **truncación a `0310`** la causaba un registro viejo de cédula corta que el autocompletar de
+  `#rut` ofrecía como prefijo y el Enter seleccionaba. **Sin cédulas cortas en la BD, no hay prefijo
+  que envenene → no hay truncación.** El guardrail de 11 dígitos lo previene en el origen.
+- El paciente **se enlaza por cédula** (teclear cédula + Enter → Dentidesk busca por ella, sin elegir
+  del dropdown), no solo por nombre. El `_type_rut_recognize` actual (press_sequentially+Enter) **ya
+  es el mecanismo correcto** — no se tocó.
+
+**El fix (commit `fd4c0e4`, 4 archivos, +62/-6):** guardrail donde debe vivir — el agente, no
+Dentidesk que acepta cualquier cosa.
+- `agent/tool_handlers.py::_cedula_dominicana_ok()` — exige EXACTAMENTE 11 dígitos; early-return
+  `cedula_invalida` en `_agendar_cita_dentidesk` antes de tocar Playwright.
+- `agent/prompts.py` (Paso 2) — Carla pide los 11 dígitos, insiste si faltan, no inventa, explica que
+  la cédula identifica al paciente.
+- `integrations/dentidesk_playwright.py` — corregidos 2 comentarios FALSOS ("duplicado que el CRM
+  rechaza" y "choca con RUT chileno").
+- Tests: `test_cedula_dominicana_ok` (9 casos) + `test_agendar_cedula_corta_no_llama_playwright` +
+  cédula válida en `_BASE_ARGS`. **Suite 113 pasan** (solo los 6+2 preexistentes respx/py3.14 fallan).
+- **NO se construyó** el guard de truncación en Playwright (YAGNI: el de 11 dígitos lo cubre).
+
+**PENDIENTE inmediato:**
+1. **Deploy de `odontotec`** en EasyPanel (el guard vive en el AGENTE, no en el daemon — no tocar
+   `dentidesk-daemon`). Prod construye de `feat/dentidesk-integration` = `fd4c0e4`.
+2. **E2E por WhatsApp** tras la limpieza del cliente. Prueba clave: cédula corta (`123`) → Carla debe
+   pedir los 11 completos y NO agendar; cédula de 11 dígitos → agenda sin duplicar.
+
+**Decisión previa (sigue vigente):** agendado pausado + el **cliente borra** las citas de prueba (la
+cuenta `carlaodontotec` no tiene permiso de borrar) y se arranca de cero.
+
+**Entregable de esta sesión:** `docs/dentidesk-debilidades-para-odonta.md` — debilidades de Dentidesk
+para replicar/corregir en **Odonta** (el CRM propio del usuario, Fable 5, aún sin probar). Dentidesk
+NO es del usuario.
+
+Memoria: [[bug_rut_cedula_dominicana_regresion_2026-07-21]], [[odonta_debilidades_dentidesk_2026-07-22]].
+
+---
+
+## ⏳ ESPERANDO AL JEFE DE ODONTOTEC (bloqueos externos, no de código) — 2026-07-22
+
+Dos decisiones que dependen del cliente, no de nosotros:
+
+1. **Número oficial de WhatsApp para Carla — pendiente de aprobación del Jefe de Odontotec.** Hasta
+   que apruebe y entregue el número Meta oficial de la clínica, Carla sigue en el número de prueba.
+   Esto desbloquea la **Fase 2** (migrar `whatsapp_phone_number`) y de rebote la Fase 3 (recordatorios)
+   y la alerta de escalada por WhatsApp. Ver [[pendiente_numero_clinica_plantillas_2026-07-16]].
+
+2. **Dónde se aloja el proyecto: VPS vs. PC dentro de la clínica — lo decide el Jefe de Odontotec.**
+   Sigue abierto. Nuestra recomendación basada en evidencia (ver sección "El usuario propuso BOTAR el
+   VPS" abajo): NO botar el VPS a ciegas — los 2 problemas que lo quemaron (Chrome muere + cookie) ya
+   se arreglaron el 2026-07-16 y aún no se ha visto correr CON el fix. Una PC en la clínica trae
+   cortes de luz, cierres accidentales de Chrome, y sin acceso remoto para arreglar. Decidir después
+   del veredicto de estabilidad, no antes.
+
+---
+
+**Estado actual:** 2026-07-22 (madrugada) | Branch: `feat/dentidesk-integration` (prod construye de ESTA branch — verificado en EasyPanel Source) | HEAD = `fd4c0e4` (fix cédula 11 dígitos, pusheado) | ⚠️ `odontotec` en prod aún corre código viejo — FALTA Deploy | Repo indexado (552 nodos, 1900 edges)
 
 **Lo de hoy en una línea:** el watchdog está **desplegado y probado contra prod** (detecta, manda el
 correo, no spamea) y **la cookie del daemon SÍ sobrevive el reinicio** — las dos cosas verificadas en
@@ -108,7 +172,35 @@ INFO:odontotec.alerts:send_dev_alert: email enviado a fondeur28@gmail.com
      "el correo se te llena y nadie lo mira". Bloqueado por lo mismo que la Fase 2 (inbox dedicado +
      plantilla Meta), NO por código.
 
-1. **⏳ VEREDICTO DEL DAEMON — esperar al 2026-07-18.** Queda UNA sola pregunta: **¿Chrome sigue vivo con `--disable-dev-shm-usage`?** (la de la cookie ya se contestó: SÍ aguanta el reinicio, ver 1b). ⚠️ **El reloj se reinició**: el usuario paró y arrancó el daemon varias veces la tarde del 2026-07-16 probando el watchdog, así que el uptime cuenta desde ~16:05, no desde el deploy de las 13:48. Chequeo: `ps aux` en la Terminal del contenedor (chrome vivo, cero `<defunct>`) + Logs (¿aparece `>>> NAVEGADOR MUERTO`? ¿cuántos `>>> Abriendo Chrome`?). **Ahora el watchdog avisa por correo si se cae**, así que no hay que estar mirando. **De esto depende si el VPS se queda o se bota** (ver 1c arriba).
+0b. **🕐 ALERTA DE CONVERSACIÓN ESTANCADA — pedido por el usuario 2026-07-22.** El watchdog debe
+   avisar cuando **Carla lleva +5 min con una conversación ABIERTA con un cliente sin concluirla**,
+   sea cual sea la causa: daemon Dentidesk caído, saldo LLM en 0, Chatwoot, VPS, cualquier cosa.
+   - **Por qué es distinto de todo lo que ya existe:** este NO parte de una causa conocida, parte del
+     **síntoma visible al paciente** (lleva rato esperando y la conversación no cerró). El watchdog
+     actual vigila las CAUSAS (daemon/LLM/métricas); esto vigila el EFECTO. Cubre el hueco de un fallo
+     que ninguna sonda anticipó. Distinto de la alerta de escalada (#0: dispara cuando Carla PIDE un
+     humano) y de `agent_failed` (3 fallos en un ciclo = "Carla caída").
+   - **Señal detectable (verificar en `integrations/chatwoot.py`):** conversación con status `open`,
+     último mensaje del PACIENTE (no de Carla), antigüedad de ese mensaje > 5 min, sin label de
+     resuelto/`bot-off`. El watchdog ya corre cada 5 min → encaja natural como un chequeo más.
+   - **Reusa lo que ya hay:** `alerts.send_dev_alert()` (email vivo, WhatsApp dormido hasta Fase 2) +
+     edge-trigger (avisar UNA vez por conversación estancada, no cada ciclo — igual que el watchdog no
+     spamea). Va en el contenedor **`odontotec`** (el watchdog vive ahí).
+   - **Abierto:** ¿Chatwoot expone el timestamp del último mensaje y quién lo envió por API? (revisar
+     antes de escribir). Si no, hay que leer los mensajes de cada conversación abierta.
+   - Ver [[watchdog_implementado_2026-07-16]] y [[pendiente_alerta_escalada_2026-07-16]].
+
+1. **✅ VEREDICTO DEL DAEMON (2026-07-22): la auto-cura FUNCIONA en producción — probada en vivo.**
+   Cerca de medianoche del 2026-07-22 Chrome **flapeó** (murió/reinició en ráfaga): el watchdog mandó
+   varios pares caído↔recuperado por correo (transiciones reales, edge-trigger OK). **En la mañana el
+   usuario entró por el daemon a Dentidesk y creó pacientes sin problema.** → Lectura: el
+   `--disable-dev-shm-usage` **NO evitó** que Chrome muriera (la prevención falla), PERO la cadena de
+   auto-cura (`_wait_until_dead` → exit 1 → contenedor reinicia → cookie restaura) **se recuperó sola
+   cada vez y el sistema quedó usable.** El usuario dio esto por bueno: "que avise que se cayó y volvió,
+   está bueno" — **NO perseguir por qué muere Chrome** (YAGNI). Esto **PESA A FAVOR DE QUEDARSE EN EL
+   VPS** (ver 1c): incluso con Chrome inestable, el VPS se auto-repara y avisa; una PC en la clínica no
+   tendría ni la auto-cura ni el aviso. Si algún día molesta el flapping: sacar el OOM con
+   `dmesg -T | grep -i "killed process"` en el VPS por SSH y/o buscar un cron nocturno (`crontab -l`).
 2. **⭐ FASE 2 — Migrar Carla al número oficial de la clínica + formalizar plantillas.** El pendiente que el usuario marcó como prioritario (2026-07-16). Dos partes: (a) cambiar `whatsapp_phone_number` al número oficial Meta de Odontotec cuando el cliente lo entregue; (b) **formalizar el trabajo con las plantillas** (templates aprobadas por Meta) — es lo que desbloquea también la Fase 3 (recordatorios 48h/24h, código listo en `c8a7a33`, pausado por falta de `CHATWOOT_INBOX_ID` + template aprobada). Ver `docs/carla-plantilla-confirmacion.md` (texto real del cliente) y memoria `pendiente_numero_clinica_plantillas_2026-07-16`.
 3. **Verificar end-to-end con Carla** (empleados van a probar): agendar cita por WhatsApp dando cédula CON guion (`031-0277809-2`) → debe guardar en Dentidesk sin guion. Guión de prueba entregado al usuario.
 4. **/health dice `commit: desconocido`** — ✅ **causa CONFIRMADA 2026-07-16** (`ls -la /app/.git/HEAD` en la Terminal de `odontotec` → `No such file or directory`). El `.dockerignore` **no** excluye `.git` (tiene un comentario explícito de que se deja a propósito), pero **EasyPanel manda el contexto de build sin `.git`** igual. Por eso `_git_commit()` cae al `except` y devuelve `desconocido`.
