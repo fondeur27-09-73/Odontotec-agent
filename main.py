@@ -10,6 +10,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
+# Antigüedad máxima de un mensaje entrante para contestarlo. Chatwoot entrega webhooks en segundos;
+# si odontotec estuvo caído, Sidekiq reintenta la entrega con backoff exponencial y el reintento
+# aterriza HORAS después -> Carla corría el agente sobre un mensaje viejo y mandaba un saludo
+# "fantasma" a una conversación ya cerrada (5:17/7:34/1:54am del 22-jul). Un mensaje de hace más de
+# esto = reintento rancio, se ignora. 10 min separa un blip breve (se contesta) de una caída larga.
+MAX_MSG_AGE_SECS = int(os.getenv("WEBHOOK_MAX_MSG_AGE_SECS", "600"))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("odontotec")
@@ -168,6 +174,25 @@ def _is_incoming(message_type) -> bool:
     return message_type == 0 or message_type == "incoming"
 
 
+def _message_age_secs(data) -> float | None:
+    """Antigüedad en segundos del mensaje según su `created_at` de Chatwoot, o None si no se puede
+    leer. Chatwoot manda `created_at` como epoch int en los webhooks (a veces ISO). Devuelve None si
+    falta o no parsea -> el que llama procesa igual (fail-open: nunca dejar mudo a un paciente real)."""
+    import time
+    from datetime import datetime
+    raw = data.get("created_at")
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, (int, float)):
+            ts = float(raw)
+        else:  # ISO 8601: "2026-07-22T05:17:00.000Z" o con offset
+            ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+        return time.time() - ts
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 def _norm_txt(s: str) -> str:
     import unicodedata
     s = unicodedata.normalize("NFD", str(s)).encode("ascii", "ignore").decode()
@@ -276,6 +301,17 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     if not content:
         return {"status": "empty"}
+
+    # Guard de antigüedad: si odontotec estuvo caído, Sidekiq reintrega este webhook HORAS después
+    # (backoff exponencial) y sin esto Carla contestaría un mensaje viejo -> saludo fantasma a una
+    # conversación cerrada. Cubre AMBOS caminos (botón y agente) porque va antes del dispatch.
+    age = _message_age_secs(data)
+    if age is None:
+        logger.warning(f"webhook: sin created_at parseable, proceso igual. keys={list(data.keys())}")
+    elif age > MAX_MSG_AGE_SECS:
+        logger.warning(f"webhook: mensaje viejo ({age:.0f}s > {MAX_MSG_AGE_SECS}s) ignorado — "
+                       f"reintento rancio de Sidekiq tras caída. conv={conv_id}")
+        return {"status": "stale"}
 
     # Interceptor de botones de la plantilla de confirmación: CONFIRMAR/CANCELAR se resuelven
     # deterministas (API Dentidesk, sin LLM ni navegador). REAGENDAR sí cae al agente para pedir

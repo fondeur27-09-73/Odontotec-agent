@@ -118,6 +118,44 @@ def test_fallo_leyendo_historial_no_deja_contestar_con_amnesia():
         assert "momento" in mock_send.call_args.args[1].lower()
 
 
+def test_mensaje_viejo_reintento_sidekiq_no_corre_agente():
+    # Saludo fantasma (22-jul): odontotec cayó, Sidekiq reentregó el webhook horas después y Carla
+    # contestó un mensaje viejo. Un mensaje con created_at de hace >10 min se ignora (status stale)
+    # y NO corre el agente ni contesta.
+    import time
+    viejo = {**PAYLOAD, "data": {**PAYLOAD["data"], "created_at": int(time.time()) - 3600}}
+    with patch("agent.claude.run_agent") as mock_agent, \
+         patch("integrations.chatwoot.send_message") as mock_send:
+        resp = client.post("/webhook", json=viejo)
+        assert resp.json()["status"] == "stale"
+        mock_agent.assert_not_called()
+        mock_send.assert_not_called()
+
+
+def test_mensaje_reciente_si_se_procesa():
+    # Un mensaje fresco (blip breve o normal) SÍ se contesta — el guard no debe tragarse lo legítimo.
+    import time
+    fresco = {**PAYLOAD, "data": {**PAYLOAD["data"], "created_at": int(time.time()) - 30}}
+    with patch("integrations.chatwoot.get_labels", return_value=[]), \
+         patch("main._build_history", return_value=[]), \
+         patch("agent.claude.run_agent", return_value="Hola."), \
+         patch("integrations.chatwoot.send_message") as mock_send:
+        resp = client.post("/webhook", json=fresco)
+        assert resp.json()["status"] == "ok"
+        mock_send.assert_called_once()
+
+
+def test_sin_created_at_procesa_igual_fail_open():
+    # Fail-open: si el payload no trae created_at (o no parsea), NO se descarta al paciente real.
+    with patch("integrations.chatwoot.get_labels", return_value=[]), \
+         patch("main._build_history", return_value=[]), \
+         patch("agent.claude.run_agent", return_value="Hola."), \
+         patch("integrations.chatwoot.send_message") as mock_send:
+        resp = client.post("/webhook", json=PAYLOAD)   # PAYLOAD no tiene created_at
+        assert resp.json()["status"] == "ok"
+        mock_send.assert_called_once()
+
+
 def test_health_reporta_el_commit_desplegado():
     # Un contenedor puede estar vivo y sano corriendo código VIEJO (deploy desde la rama
     # equivocada). "status: ok" no distingue ese caso — solo se nota cuando algo falla y el
