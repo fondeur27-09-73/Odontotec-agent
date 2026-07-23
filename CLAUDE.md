@@ -1,6 +1,32 @@
 # CLAUDE.md — Carla Odontotec WhatsApp Agent
 
-## 🟢 ARRANCAR AQUÍ — Sesión 2026-07-22 (madrugada): duplicados/RUT RESUELTO EN CÓDIGO
+## 🟢 ARRANCAR AQUÍ — Sesión 2026-07-23: DOS bugs abiertos post-suspensión VPS
+
+Ver memoria [[handoff_chrome_oom_carla_fantasma_2026-07-23]] (detalle completo). Resumen:
+
+**Cambios locales SIN commitear:** heartbeat en `scripts/dentidesk_daemon.py` + test en
+`tests/test_dentidesk_tools.py`. NO desplegado. Branch `feat/dentidesk-integration`, HEAD `fd4c0e4`.
+
+**PROBLEMA 1 — Chrome del daemon muere seguido (`dentidesk-daemon`).** Pista clave: ANTES de la
+suspensión del VPS por impago (21-jul) Chrome vivía +24h; DESPUÉS muere seguido (correos 22-jul
+10:37am y 11:15pm). Código sin cambios → **causa = ENTORNO, sospecha OOM del host.** Causa del "caído
+TODO el día" = al reiniciar, la cookie de hace horas ya está rotada → login form → espera VNC (la
+premisa "sesión no expira" es FALSA, probada por log). FIX escrito: `_keep_session_warm()` — cada
+5 min en pestaña dedicada navega Dentidesk + re-guarda cookie fresca → reinicio se auto-cura SIN VNC
+(colchón, NO cura del OOM). PRÓXIMO: (1) `dmesg -T | grep -i "killed process"` + `free -h` en el HOST
+del VPS por SSH → confirmar OOM; (2) commit+push+Deploy de `dentidesk-daemon` (reinicia → si la cookie
+ya rotó, UNA última vez por VNC).
+
+**PROBLEMA 2 — Carla manda saludos FANTASMA (`odontotec`).** Escribió sola sin input 5:17/7:34/1:54am
+del 22-jul (convo cerró 12:14am). Humo: `main.py:288` corre el agente por cada `message_created`
+entrante SIN idempotencia por `message.id`. Hipótesis: reintentos de Chatwoot/Sidekiq del mensaje
+viejo tras odontotec inestable. CONFIRMAR: grep `webhook payload` en logs de odontotec a esas horas
+(¿mismo id que "Gracias"?). FIX = dedup por `message.id`. Carla ≠ daemon (2 contenedores; daemon
+caído solo rompe agendar=409, no el chat).
+
+---
+
+## 🟢 (previo) Sesión 2026-07-22 (madrugada): duplicados/RUT RESUELTO EN CÓDIGO
 
 **En una línea:** el experimento VNC del usuario corrigió la causa raíz. El fix son **11 dígitos de
 cédula obligatorios EN EL AGENTE** (commit `fd4c0e4`, pusheado). **Falta:** deploy de `odontotec` +
