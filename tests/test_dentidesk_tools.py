@@ -7,7 +7,7 @@ import pytest
 
 from agent.tool_handlers import _to_24h, _resolve_doctor, handle_tool, _cedula_dominicana_ok
 from integrations.dentidesk_playwright import _split_time_24h, _rut_field
-from scripts.dentidesk_daemon import _wait_until_dead, _keep_session_warm
+from scripts.dentidesk_daemon import _wait_until_dead, _keep_session_warm, _clear_singleton_locks
 
 
 # --- _wait_until_dead: el daemon debe salir cuando Chrome se muere, no dormir para siempre ---
@@ -39,6 +39,18 @@ def test_keep_session_warm_heartbeat_en_pestana_propia_y_resave():
     ctx.new_page.assert_called_once()   # pestana dedicada, NUNCA pages[0] (no pisa una cita)
     assert hb.goto.called               # navego Dentidesk = actividad (sesion caliente)
     assert save.called                  # re-guardo la cookie fresca para el proximo reinicio
+
+
+# --- _clear_singleton_locks: lock rancio del perfil persistente hacia crash-loop de Chrome ---
+
+def test_clear_singleton_locks_borra_los_rancios_y_tolera_ausentes(tmp_path):
+    (tmp_path / "SingletonLock").write_text("host-26")   # el que causaba exitCode=21
+    # SingletonSocket y SingletonCookie NO existen -> no debe reventar por ellos
+    removed = _clear_singleton_locks(str(tmp_path))
+    assert removed == ["SingletonLock"]
+    assert not (tmp_path / "SingletonLock").exists()
+    # idempotente: segunda pasada sin locks no borra nada ni falla
+    assert _clear_singleton_locks(str(tmp_path)) == []
 
 
 # --- _rut_field: cédula dominicana con guion rompe el campo RUT chileno de Dentidesk ---

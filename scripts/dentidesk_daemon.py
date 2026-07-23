@@ -135,9 +135,36 @@ def _env():
     return e
 
 
+def _clear_singleton_locks(profile):
+    """Borra los locks Singleton* que un Chrome muerto-sucio (OOM/kill) deja en el perfil persistente.
+
+    Evidencia dura 2026-07-23: tras un reinicio, `launch_persistent_context` fallaba con
+    `process_singleton_posix.cc:365 ... profile appears to be in use by another Google Chrome
+    process (N) on another computer (HOST)` y `exitCode=21` -> el contenedor entraba en crash-loop y
+    Chrome nunca abria. El `SingletonLock` es un symlink cuyo destino es `hostname-pid`; como el
+    perfil vive en el volumen /data, sobrevive al reinicio apuntando al hostname del contenedor
+    MUERTO -> el contenedor nuevo no puede verificar que ese proceso murio y Chrome rehusa arrancar.
+    Antes esto no molestaba porque el daemon NO reiniciaba (dormia con `while True`); el heartbeat/
+    _wait_until_dead ahora si reinicia -> el lock rancio se volvio el bloqueo real. Borrarlos es
+    seguro: si de verdad hubiera otro Chrome vivo sobre este perfil, ya habria chocado por el puerto
+    CDP mucho antes.
+    """
+    removed = []
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        try:
+            os.remove(os.path.join(profile, name))
+            removed.append(name)
+        except OSError:
+            pass  # no existe = nada que limpiar
+    if removed:
+        print(f">>> Locks Singleton rancios borrados del perfil: {removed}", flush=True)
+    return removed
+
+
 def main():
     from playwright.sync_api import sync_playwright
     os.makedirs(PROFILE, exist_ok=True)
+    _clear_singleton_locks(PROFILE)  # perfil en /data: un Chrome muerto-sucio deja el lock -> crash-loop
     e = _env()
     with sync_playwright() as p:
         # Este print separa "python no corre" de "python colgado abriendo Chrome": si sale este y
