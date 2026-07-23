@@ -199,12 +199,26 @@ def test_agendar_hora_invalida_no_llama_playwright():
     mock_pw.assert_not_called()
 
 
-def test_escalate_agrega_label_bot_off():
+class _SyncThread:
+    """Thread que corre el target al start(), para poder assertar el fire-and-forget en el test."""
+    def __init__(self, target=None, args=(), daemon=None):
+        self._t, self._a = target, args
+    def start(self):
+        self._t(*self._a)
+
+
+def test_escalate_agrega_label_bot_off_y_avisa_al_operador():
+    # El label bot-off es pasivo: sin el aviso, el paciente pide humano y nadie se entera.
     with patch("integrations.chatwoot.add_label") as mock_label, \
-         patch("integrations.chatwoot.get_labels", return_value=[]):
+         patch("integrations.chatwoot.get_labels", return_value=[]), \
+         patch("integrations.alerts.send_dev_alert") as mock_alert, \
+         patch("threading.Thread", _SyncThread):
         result = json.loads(handle_tool("escalate_to_human",
                                         {"reason": "recado", "conversation_id": 42}))
     mock_label.assert_called_once_with(42, "bot-off")
+    mock_alert.assert_called_once()                      # se avisó al operador
+    assert "42" in mock_alert.call_args.args[0]          # con el id de la conversación
+    assert "recado" in mock_alert.call_args.args[0]      # y el motivo
     assert result["success"] is True
 
 

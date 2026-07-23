@@ -350,5 +350,14 @@ def _confirmar_cita_dentidesk(id_agenda: str, sucursal: str = "arroyo_hondo") ->
 
 def _escalate_to_human(reason: str, conversation_id: int) -> dict:
     chatwoot.add_label(conversation_id, "bot-off")
+    # El label bot-off es PASIVO: sin esto nadie se entera de que el paciente pidió un humano y queda
+    # esperando. Avisar al operador. send_dev_alert es SMTP SÍNCRONO (timeout 15s) y esto corre dentro
+    # de run_agent -> inline colgaría la respuesta al paciente hasta 15s. Por eso va en un hilo daemon
+    # aparte (fire-and-forget). send_dev_alert es best-effort, nunca lanza.
+    import threading
+    from integrations import alerts
+    msg = (f"[CARLA-ESCALADA] 🙋 la conversación {conversation_id} pidió un humano — "
+           f"atender en Chatwoot. Motivo: {reason}")
+    threading.Thread(target=alerts.send_dev_alert, args=(msg,), daemon=True).start()
     return {"success": True, "escalated": True}
 
