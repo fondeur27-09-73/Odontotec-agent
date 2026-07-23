@@ -1,28 +1,49 @@
 # CLAUDE.md — Carla Odontotec WhatsApp Agent
 
-## 🟢 ARRANCAR AQUÍ — Sesión 2026-07-23: DOS bugs abiertos post-suspensión VPS
+## 🟢 ARRANCAR AQUÍ — Sesión 2026-07-23 CERRADA: 6 fixes desplegados, todo verificado
 
-Ver memoria [[handoff_chrome_oom_carla_fantasma_2026-07-23]] (detalle completo). Resumen:
+Branch `feat/dentidesk-integration`, HEAD `e166d38`. **Los dos bugs post-suspensión + 3 pendientes
+resueltos y desplegados esta sesión.** Detalle en memorias [[singleton_lock_daemon_crashloop_2026-07-23]],
+[[pendiente_alerta_conversacion_estancada_2026-07-22]], [[pendiente_alerta_escalada_2026-07-16]].
 
-**Cambios locales SIN commitear:** heartbeat en `scripts/dentidesk_daemon.py` + test en
-`tests/test_dentidesk_tools.py`. NO desplegado. Branch `feat/dentidesk-integration`, HEAD `fd4c0e4`.
+| Commit | Qué | Contenedor | Estado |
+|--------|-----|-----------|--------|
+| `d498e8d` | heartbeat: re-guarda cookie cada 5 min (`_keep_session_warm`) | daemon | ✅ desplegado+verificado |
+| `7c9d03b` | **SingletonLock**: borra el lock rancio antes de abrir Chrome | daemon | ✅ desplegado+verificado |
+| `2354dae` | guard de antigüedad: ignora mensajes viejos (no más fantasma) | odontotec | ✅ desplegado |
+| `a031ddd` | watchdog conversación estancada +5 min | odontotec | ✅ desplegado+**verificado en vivo** |
+| `fd4c0e4` | cédula 11 dígitos obligatorios en el agente | odontotec | ✅ desplegado |
+| `e166d38` | alerta de escalada (bot-off) por email fire-and-forget | odontotec | ✅ desplegado |
 
-**PROBLEMA 1 — Chrome del daemon muere seguido (`dentidesk-daemon`).** Pista clave: ANTES de la
-suspensión del VPS por impago (21-jul) Chrome vivía +24h; DESPUÉS muere seguido (correos 22-jul
-10:37am y 11:15pm). Código sin cambios → **causa = ENTORNO, sospecha OOM del host.** Causa del "caído
-TODO el día" = al reiniciar, la cookie de hace horas ya está rotada → login form → espera VNC (la
-premisa "sesión no expira" es FALSA, probada por log). FIX escrito: `_keep_session_warm()` — cada
-5 min en pestaña dedicada navega Dentidesk + re-guarda cookie fresca → reinicio se auto-cura SIN VNC
-(colchón, NO cura del OOM). PRÓXIMO: (1) `dmesg -T | grep -i "killed process"` + `free -h` en el HOST
-del VPS por SSH → confirmar OOM; (2) commit+push+Deploy de `dentidesk-daemon` (reinicia → si la cookie
-ya rotó, UNA última vez por VNC).
+**PROBLEMA 1 (Chrome muere → daemon caído todo el día) — RESUELTO.** La causa del "caído todo el día"
+NO era solo la cookie: era un **`SingletonLock` rancio** en `/data/dd_profile` que, tras un reinicio,
+apuntaba al hostname del contenedor MUERTO → Chrome rehusaba arrancar (`exitCode=21`,
+`process_singleton_posix`) → crash-loop, ni por VNC. `_clear_singleton_locks` lo borra antes del
+launch. La teoría "SingletonLock" que el handoff daba por FALSA era falsa SOLO mientras el daemon no
+reiniciaba; el heartbeat lo hace reiniciar → se volvió real. **Cadena de auto-cura COMPLETA verificada
+en vivo:** Chrome muere → reinicia → borra lock → restaura cookie fresca → logueado, SIN humano. ⚠️ NO
+perseguir un "Chrome muere cada 6 min": eran teardowns de EasyPanel al desplegar, NO OOM (el watchdog
+no mandó correo caído/recuperado → no se cayó). El flapping OOM histórico del 22-jul sí fue real pero
+NO urgente (se auto-cura); sacar con `dmesg -T | grep "killed process"` + `free -h` solo si molesta.
 
-**PROBLEMA 2 — Carla manda saludos FANTASMA (`odontotec`).** Escribió sola sin input 5:17/7:34/1:54am
-del 22-jul (convo cerró 12:14am). Humo: `main.py:288` corre el agente por cada `message_created`
-entrante SIN idempotencia por `message.id`. Hipótesis: reintentos de Chatwoot/Sidekiq del mensaje
-viejo tras odontotec inestable. CONFIRMAR: grep `webhook payload` en logs de odontotec a esas horas
-(¿mismo id que "Gracias"?). FIX = dedup por `message.id`. Carla ≠ daemon (2 contenedores; daemon
-caído solo rompe agendar=409, no el chat).
+**PROBLEMA 2 (saludos fantasma) — RESUELTO.** `main.py` corría el agente por cada `message_created`
+sin mirar antigüedad → cuando odontotec estuvo caído, Sidekiq reentregaba el webhook HORAS después
+(backoff exponencial = las horas irregulares 5:17/7:34/1:54) y Carla contestaba un mensaje viejo.
+Fix = **guard de antigüedad** (`_message_age_secs`: ignora mensajes con `created_at` de hace
+>`WEBHOOK_MAX_MSG_AGE_SECS`=600s), NO dedup por id (no sobrevive reinicio). Fail-open: si falta
+`created_at` procesa igual y loguea las keys. (La evidencia directa del 22-jul se perdió: logs rotaron.)
+
+**Los 3 pendientes que se cerraron de regalo:** (a) cédula 11 dígitos ya vivía en `fd4c0e4`; (b)
+watchdog de conversación estancada +5 min (`_check_stalled_conversations`, edge-trigger, verificado en
+vivo: detectó convs 7/3 + correos llegaron — eran procesos viejos colgados, no pacientes reales); (c)
+alerta de escalada (`_escalate_to_human` avisa por email en hilo daemon fire-and-forget).
+
+**Suite: 124 pasan** (6+2 fallos preexistentes de respx/py3.14, no míos).
+
+**PRÓXIMO (nada urgente):** ⭐ Fase 2 (número oficial Meta + plantillas — bloqueada por el cliente,
+desbloquea WhatsApp para TODAS las alertas que hoy salen por email). Seguridad: `WEBHOOK_SECRET=MISSING`
+en odontotec (webhook acepta cualquier origen), rotar `DENTIDESK_WEB_PASS`, quitar dominio VNC. E2E de
+cédula por WhatsApp tras limpieza del cliente.
 
 ---
 
