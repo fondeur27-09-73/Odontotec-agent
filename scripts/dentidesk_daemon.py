@@ -30,8 +30,12 @@ PROFILE = os.getenv("DENTIDESK_PROFILE_DIR", os.path.join(OUT, "dd_profile"))
 # La cookie de sesion PHP de Dentidesk es una *session cookie*: Chrome NO la escribe a disco
 # aunque el perfil viva en el volumen, asi que muere cuando el contenedor reinicia y pide
 # reCAPTCHA de nuevo. La volcamos a un JSON en el mismo volumen (/data/cookies.json en prod) y
-# la restauramos al arrancar. Como la sesion server-side no expira (regla del cliente), revive
-# el login sin captcha.
+# la restauramos al arrancar.
+# OJO (2026-07-22, evidencia dura): la sesion server-side SI expira/rota — NO es cierto lo que
+# decia la "regla del cliente". El daemon quedo caido todo el dia porque Chrome murio tras ~10h,
+# el contenedor reinicio y restauro la cookie del login de hacia 10h (ya vencida) -> formulario de
+# login. Por eso _keep_session_warm re-guarda la cookie cada pocos minutos: el disco siempre
+# refleja la sesion VIVA, y el reinicio se auto-cura sin humano.
 COOKIES = os.getenv("DENTIDESK_COOKIES_FILE", os.path.join(os.path.dirname(PROFILE), "cookies.json"))
 LOGIN_URL = "https://app.dentidesk.com/home.php"
 CDP_PORT = 9222
@@ -82,6 +86,40 @@ def _wait_until_dead(page, poll=5):
     """
     while not page.is_closed():
         time.sleep(poll)
+
+
+def _keep_session_warm(ctx, page, poll=5, every=None):
+    """Como `_wait_until_dead`, pero cada `every` segundos mantiene la sesion viva.
+
+    El 2026-07-22 el daemon quedo caido TODO el dia: Chrome murio tras ~10h, el contenedor reinicio
+    y `_load_cookies` restauro la cookie del login de hacia 10h (Dentidesk ya la habia rotado/
+    vencido) -> cayo al formulario de login y se quedo esperando un humano. Este loop lo evita con
+    dos efectos, ambos en una pestana DEDICADA (nunca pages[0], que crear_cita/mover_cita usan por
+    CDP desde el proceso de la API -> tocar pages[0] pisaria una cita a medias):
+      1) navega Dentidesk periodicamente -> actividad -> la sesion no se enfria por idle.
+      2) re-guarda la cookie -> /data/cookies.json siempre refleja la sesion VIVA actual, asi el
+         proximo reinicio restaura una sesion buena y se auto-cura sin humano en el reCAPTCHA.
+    """
+    every = every if every is not None else int(os.getenv("DENTIDESK_HEARTBEAT_SECS", "300"))
+    try:
+        hb = ctx.new_page()
+    except Exception as ex:
+        print(f">>> heartbeat: no pude abrir pestana dedicada ({ex}); solo vigilo la muerte.",
+              flush=True)
+        return _wait_until_dead(page, poll)
+    last = time.monotonic()
+    while not page.is_closed():
+        time.sleep(poll)
+        if time.monotonic() - last < every:
+            continue
+        last = time.monotonic()
+        try:
+            hb.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=20000)
+            _save_cookies(ctx)
+            print(">>> heartbeat: navegue Dentidesk + re-guarde cookie (sesion caliente).",
+                  flush=True)
+        except Exception as ex:
+            print(f">>> heartbeat fallo, ignoro y sigo ({ex}).", flush=True)
 
 
 def _env():
@@ -167,7 +205,7 @@ def main():
             )
             print("Navegador se queda abierto (API en subproceso aparte).", flush=True)
             try:
-                _wait_until_dead(page)
+                _keep_session_warm(ctx, page)
             except KeyboardInterrupt:
                 print("Cerrando daemon (Ctrl+C).", flush=True)
                 return

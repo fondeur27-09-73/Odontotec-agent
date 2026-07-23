@@ -7,7 +7,7 @@ import pytest
 
 from agent.tool_handlers import _to_24h, _resolve_doctor, handle_tool, _cedula_dominicana_ok
 from integrations.dentidesk_playwright import _split_time_24h, _rut_field
-from scripts.dentidesk_daemon import _wait_until_dead
+from scripts.dentidesk_daemon import _wait_until_dead, _keep_session_warm
 
 
 # --- _wait_until_dead: el daemon debe salir cuando Chrome se muere, no dormir para siempre ---
@@ -24,6 +24,21 @@ def test_wait_until_dead_no_bloquea_si_ya_esta_muerto():
     page.is_closed.return_value = True
     _wait_until_dead(page, poll=0)
     assert page.is_closed.call_count == 1
+
+
+# --- _keep_session_warm: heartbeat en pestana propia + re-guarda cookie (fix caido-todo-el-dia) ---
+
+def test_keep_session_warm_heartbeat_en_pestana_propia_y_resave():
+    ctx = MagicMock()
+    hb = MagicMock()
+    ctx.new_page.return_value = hb
+    page = MagicMock()
+    page.is_closed.side_effect = [False, True]  # una vuelta con heartbeat, luego muere
+    with patch("scripts.dentidesk_daemon._save_cookies") as save:
+        _keep_session_warm(ctx, page, poll=0, every=0)
+    ctx.new_page.assert_called_once()   # pestana dedicada, NUNCA pages[0] (no pisa una cita)
+    assert hb.goto.called               # navego Dentidesk = actividad (sesion caliente)
+    assert save.called                  # re-guardo la cookie fresca para el proximo reinicio
 
 
 # --- _rut_field: cédula dominicana con guion rompe el campo RUT chileno de Dentidesk ---
