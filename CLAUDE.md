@@ -1,6 +1,92 @@
 # CLAUDE.md — Carla Odontotec WhatsApp Agent
 
-## 🟢 ARRANCAR AQUÍ — Sesión 2026-07-23 CERRADA: 6 fixes desplegados, todo verificado
+## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-19: FASE 2 EN VUELO (inbox 849 creado, falta Meta + e2e)
+
+**En una línea:** el cliente entregó el número oficial, el inbox de Chatwoot ya está creado, y
+**la migración NO requiere tocar código** — falta pegar el webhook en Meta y probar.
+
+### Datos del número nuevo (Fase 2)
+
+| Dato | Valor |
+|---|---|
+| Número | `+18494107913` |
+| Phone Number ID | `1242049598998643` |
+| WABA ID | `935606856224223` |
+| Token permanente | System User "Karla BOT" (no está en el repo) |
+| Inbox Chatwoot | `Cliente Dental - 849` (cuenta 3) |
+| Webhook URL | `https://testagente1-chatwoot.oyfspa.easypanel.host/webhooks/whatsapp/+18494107913` |
+| Verify Token | NO se guarda acá (credencial). Está en Chatwoot → Settings → Inboxes → `Cliente Dental - 849`. ⚠️ quedó escrito en un chat — regenerar tras el e2e |
+
+### ⚠️ La migración NO necesita cambios de código — verificado leyendo main.py
+
+- `webhook` saca `conv_id` de `payload.data.conversation.id` (main.py:289) y contesta con
+  `send_message(conv_id, ...)`. **Ya es dinámico**, no hay inbox fijo en el camino de respuesta.
+- **El webhook NUNCA mira `inbox_id`.** Los webhooks de Chatwoot son a nivel de CUENTA → el inbox
+  nuevo dispara solo, sin configurar nada en `odontotec`. Consecuencia: **con los dos inboxes vivos,
+  Carla contesta en AMBOS números.** Es lo esperado durante la transición.
+- **`CHATWOOT_INBOX_ID` NO es requisito de Fase 2.** Solo la lee `_inbox_id()` → `send_template()`,
+  llamado por `scheduler/reminders.py:103` (Fase 3, PAUSADA) y `alerts.py:68` (que usa su propia
+  `WATCHDOG_ALERT_INBOX_ID`). Cambiarla es preparación de Fase 3.
+
+### PENDIENTE inmediato (por orden)
+
+1. **Meta** → App → WhatsApp → Configuration → Webhooks → Edit: pegar Callback URL + Verify Token →
+   **Verify and save**. Después, en **Webhook fields**, suscribir **`messages`** (esto se saltea seguido:
+   sin `messages` todo se ve verde y no llega ni un mensaje).
+2. **E2E:** WhatsApp al 849 → Carla contesta sola. Luego agendar/reagendar real.
+3. **Solo tras el 100%:** apagar el inbox viejo. Nunca antes.
+4. **Avisarle al cliente:** el 849 ya NO abre en la app de WhatsApp del celular (un número vive en la
+   app O en la Cloud API, no en ambas). La ventana para ver las conversaciones es **Chatwoot**. Decirlo
+   ANTES de que lo descubran solos y crean que se rompió algo. El QR que muestra Chatwoot es
+   `wa.me/18494107913` — para que el PACIENTE lo escanee; no hay emparejamiento por QR en Cloud API.
+
+## 🔍 (2026-08-18) El flapping "daemon caído" de agosto era FALSA ALARMA — causa raíz encontrada
+
+**NO era OOM ni el VPS pobre.** Las firmas de error distinguen la causa — leer el CUERPO del correo,
+no solo el asunto:
+
+| Firma | Significa |
+|---|---|
+| `ReadTimeout: timed out` (los ~12 pares del 8–9 ago) | contenedor ARRIBA, API respondiendo, solo tardó >15s |
+| `502 Bad Gateway` (el del 9 ago 15:09) | API viva; `/session` da 502 cuando `session_status()` lanza → **Chrome muerto, API viva** |
+| `ConnectError: Name or service not known` | ESE sí es el contenedor apagado (firma de la prueba de julio) |
+
+**Causa raíz (verificada en código, SIN ARREGLAR):** `session_status()`
+([dentidesk_playwright.py:667](integrations/dentidesk_playwright.py#L667)) hace
+`page.goto(AGENDA_URL, wait_until="networkidle")`. La agenda hace polling de fondo — el propio daemon
+lo documenta en `dentidesk_daemon.py:208` ("rara vez llega a networkidle"). Sin ventana de 500ms en
+silencio, el goto corre hasta el default de Playwright (30s) mientras el watchdog corta a los 15s
+([watchdog.py:46](scheduler/watchdog.py#L46)). **15s < 30s → ReadTimeout intermitente** = flapping cada
+5 min sin causa externa. El heartbeat ya usa `domcontentloaded`; `session_status` quedó con
+`networkidle` por inconsistencia, no por decisión.
+
+**Fix pendiente (2 líneas, NO aplicado):**
+1. `session_status()`: `wait_until="domcontentloaded"`.
+2. **`/session` debe tomar `_write_lock`** — hoy NO lo toma ([daemon_api.py:89](scripts/dentidesk_daemon_api.py#L89))
+   y navega **`pages[0]`** vía `_open_write_page`, la MISMA página que usa `crear_cita`. El `_write_lock`
+   solo serializa escrituras entre sí. → El watchdog, cada 5 min, **puede navegar la página fuera de
+   debajo de una cita a medio crear**. Carrera real, nunca vista disparar. El heartbeat sí evita
+   `pages[0]` a propósito.
+
+**Hueco de la auto-cura:** `_wait_until_dead` solo mira `page.is_closed()` (`dentidesk_daemon.py:87`)
+→ detecta Chrome MUERTO, no Chrome COLGADO. Un Chrome congelado se ve vivo para el daemon, nunca
+reinicia, y la UI en VNC no responde a clics. Se resolvió con **Restart manual** del contenedor.
+
+**⚠️ El silencio del watchdog NO es señal de salud.** Estuvo 9 días sin mandar nada y eso admitía tres
+lecturas incompatibles (se curó y odontotec reinició tragándose el aviso / sigue roto y el edge-trigger
+se calló / odontotec mismo está muerto). Hicieron falta 3 chequeos externos para desambiguar. **Antes
+de operar, comprobar el estado ACTIVAMENTE, nunca inferirlo de la ausencia de alertas.**
+
+**Cierre 2026-08-19 00:39Z:** correo `✅ daemon recuperado` = `/session` devolvió `logueado: true`.
+Daemon sano, cookie fresca. `odontotec` `/health` → 200.
+
+**NO resucitar:** se sospechó que el reCAPTCHA no marcaba por `--enable-automation` /
+`navigator.webdriver` de `launch_persistent_context`. **El fix NO se aplicó** — tras el restart el
+usuario logueó bien. No tocar sin evidencia nueva.
+
+---
+
+## 🟢 (previo) ARRANCAR AQUÍ — Sesión 2026-07-23 CERRADA: 6 fixes desplegados, todo verificado
 
 Branch `feat/dentidesk-integration`, HEAD `e166d38`. **Los dos bugs post-suspensión + 3 pendientes
 resueltos y desplegados esta sesión.** Detalle en memorias [[singleton_lock_daemon_crashloop_2026-07-23]],
