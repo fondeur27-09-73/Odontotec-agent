@@ -1,13 +1,43 @@
 # CLAUDE.md — Carla Odontotec WhatsApp Agent
 
-## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-19: FASE 2 EN VUELO (inbox 849 creado, falta override en Meta + e2e)
+## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-19 CERRADA: FASE 2 VIVA + incidente Farmaol resuelto
 
-**En una línea:** el cliente entregó el número oficial, el inbox de Chatwoot ya está creado, y
-**la migración NO requiere tocar código** — falta el **override de webhook por número** en Meta y probar.
+**En una línea:** Carla ya contesta por el número oficial `849-410-7913`, y en el camino se descubrió
+y arregló que **crear el inbox de Chatwoot había dejado mudo a un bot de producción ajeno**.
 
-⚠️ **El paso de Meta NO es el que decía este archivo.** El 849 comparte App y WABA con un bot de
-producción ajeno (Pharmaol, `809-343-1368`); cambiar el webhook del App lo dejaría mudo. Leer el
-bloque 🚨 antes de abrir Meta.
+| Qué | Estado |
+|---|---|
+| `849-410-7913` → Chatwoot → Carla contesta | ✅ **verificado en vivo** |
+| `809-343-1368` → Farmaol/Vocero | ✅ **restaurado** (estuvo caído por nosotros, ver 🚨) |
+| Override de webhook a nivel de NÚMERO (no de WABA) | ✅ aplicado y confirmado por API |
+| Guard del autocompletar de `#rut` (commit `0c61ce9`, pusheado) | ⏳ **falta Deploy de `dentidesk-daemon`** |
+| E2E de agendar/reagendar real | ❌ **BLOQUEADO**: duplicados de cédula corta en Dentidesk |
+
+### ▶️ LO PRIMERO AL RETOMAR
+
+1. **¿Se desplegó `dentidesk-daemon`?** El guard `0c61ce9` está pusheado pero puede que no desplegado.
+   Verificar sin depender del hash (`/health` dice `commit: desconocido`): en la Terminal del
+   contenedor, `ls -la /app/integrations/dentidesk_playwright.py` → debe dar **39142 bytes**.
+   Menos = el deploy no tomó.
+2. **¿El cliente borró los registros de cédula incompleta?** Sin eso el e2e de agendar sigue chocando
+   (ver el bloque 🩹). El usuario quedó en pedírselo el 2026-08-19.
+3. **Si ambas están OK → correr el e2e de agendar** por WhatsApp al 849 con cédula de 11 dígitos, y
+   verificar que la cita cae en la ficha correcta y no duplica.
+
+### ⚠️ DOS AVISOS AL CLIENTE QUE SIGUEN PENDIENTES (dependen de personas, no de código)
+
+- **Nadie debe registrar el `849-410-7913` en la app de WhatsApp del celular.** Un número vive en la
+  app O en la Cloud API, nunca en ambas: si alguien lo registra, Meta lo da de baja de la Cloud API y
+  **se cae toda la integración**. Las conversaciones se atienden desde **Chatwoot**.
+- **Que borre los pacientes de cédula incompleta** (`carlaodontotec` no tiene permiso de borrar).
+
+### 🔐 Credenciales expuestas hoy — regenerar
+
+- **Verify Token** del inbox `Cliente Dental - 849` (quedó escrito en un chat).
+- **Token permanente de "Karla BOT"** (salió parcial en una captura de pantalla).
+- `CHATWOOT_API_TOKEN` del `.env` **local** da **401** (prod está bien — Carla funciona). Higiene.
+- `WEBHOOK_SECRET` sigue **MISSING** en `odontotec` → el webhook acepta cualquier origen. Ahora que
+  hay número oficial del cliente en producción, esto pesa más que antes.
 
 ### Datos del número nuevo (Fase 2)
 
