@@ -101,6 +101,20 @@ class SesionNoLogueada(RuntimeError):
     un fallo real del formulario y responder 409 (no 502) al agente."""
 
 
+class CedulaAutocompletarHijack(RuntimeError):
+    """El autocompletar de #rut enlazó un paciente DISTINTO al de la cédula tecleada.
+
+    Pasa cuando la base tiene registros viejos con cédula CORTA: al teclear '03102778092' el
+    dropdown ofrece por prefijo el registro de '0310', queda resaltado, y el Enter final —que
+    debería solo cerrar la lista— SELECCIONA esa fila. Dentidesk sobrescribe #rut con la cédula
+    corta y pone #id_paciente en la ficha equivocada.
+
+    Sin este guard el agendado seguía adelante y creaba la cita en la ficha de OTRA persona, sin
+    error visible: _type_rut_recognize devolvía True ('paciente reconocido') porque solo miraba que
+    #id_paciente != 0, nunca DE QUIÉN. Se lanza ANTES de tocar #btn_guardar_cita — es preferible
+    fallar ruidoso que reservar en la ficha equivocada."""
+
+
 # La agenda logueada define moment.js y la global window.open_modal_cita; la página de login NO.
 # Por eso "¿existe moment + open_modal_cita?" es un proxy fiable de "¿hay sesión?" — sirve tanto
 # para el camino de crear (que sí los usa) como para el de mover (que trabaja por clicks).
@@ -319,6 +333,18 @@ def _type_rut_recognize(page, rut: str, cap_ms: int = 3000) -> bool:
     page.fill("#rut", "")                                  # limpia por si trae algo
     page.locator("#rut").press_sequentially(rut, delay=30)  # teclea -> dispara autocompletar
     page.press("#rut", "Enter")                            # cierra la selección (= click en la fila)
+    # El Enter NO siempre solo cierra: si el dropdown dejó resaltada la fila de otro paciente, la
+    # SELECCIONA y sobrescribe #rut. Un registro viejo de cédula corta ('0310') matchea por prefijo
+    # a una de 11 dígitos ('03102778092') y se la lleva. Releer el campo es la única señal — ver
+    # CedulaAutocompletarHijack. Comparamos solo dígitos porque Dentidesk reformatea el RUT.
+    tecleado = "".join(c for c in rut if c.isdigit())
+    quedo = "".join(c for c in (page.input_value("#rut") or "") if c.isdigit())
+    if tecleado and quedo != tecleado:
+        raise CedulaAutocompletarHijack(
+            f"El autocompletar de Dentidesk cambió la cédula {tecleado} por {quedo or '(vacío)'}: "
+            "hay un paciente viejo con cédula corta que matchea por prefijo. Agendar ahora crearía "
+            "la cita en la ficha equivocada. Hay que borrar los registros de cédula incompleta."
+        )
     try:
         page.wait_for_function(
             "() => { const el = document.getElementById('id_paciente');"

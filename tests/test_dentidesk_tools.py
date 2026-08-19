@@ -465,3 +465,45 @@ def test_call_daemon_409_devuelve_error_estructurado():
     assert out["success"] is False
     assert out["error"] == "daemon_no_logueado"
     assert "message" in out
+
+
+# --- Guard del autocompletar de #rut (2026-08-19): un registro viejo de cédula CORTA matchea por
+#     prefijo a una de 11 dígitos y el Enter final se lleva la ficha equivocada. ---
+
+def test_type_rut_recognize_detecta_hijack_del_autocompletar():
+    # Tecleamos 11 dígitos pero el campo quedó con la cédula corta del paciente viejo → hijack.
+    from integrations import dentidesk_playwright as dp
+    page = MagicMock()
+    page.input_value.return_value = "0310"
+    with pytest.raises(dp.CedulaAutocompletarHijack) as exc:
+        dp._type_rut_recognize(page, "03102778092")
+    assert "03102778092" in str(exc.value) and "0310" in str(exc.value)
+    # Debe abortar ANTES de dar por bueno el #id_paciente — si no, agenda en la ficha equivocada.
+    page.wait_for_function.assert_not_called()
+
+
+def test_type_rut_recognize_ok_aunque_dentidesk_reformatee_el_rut():
+    # Dentidesk puede devolver el RUT con guion/puntos: se comparan solo dígitos, no el texto.
+    from integrations import dentidesk_playwright as dp
+    page = MagicMock()
+    page.input_value.return_value = "031-0277809-2"
+    page.wait_for_function.return_value = None  # #id_paciente quedó != 0 → paciente existente
+    assert dp._type_rut_recognize(page, "03102778092") is True
+
+
+def test_type_rut_recognize_false_para_paciente_nuevo():
+    # Nadie con esa cédula: la cédula sobrevive intacta y #id_paciente nunca se llena → alta nueva.
+    from integrations import dentidesk_playwright as dp
+    page = MagicMock()
+    page.input_value.return_value = "03102778092"
+    page.wait_for_function.side_effect = Exception("timeout")
+    assert dp._type_rut_recognize(page, "03102778092") is False
+
+
+def test_type_rut_recognize_no_revienta_con_placeholder_sin_digitos():
+    # _rut_field() manda '1-9' cuando la cédula viene vacía; ese caso no debe disparar el guard.
+    from integrations import dentidesk_playwright as dp
+    page = MagicMock()
+    page.input_value.return_value = "1-9"
+    page.wait_for_function.side_effect = Exception("timeout")
+    assert dp._type_rut_recognize(page, "1-9") is False

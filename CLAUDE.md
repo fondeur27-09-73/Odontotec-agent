@@ -1,9 +1,13 @@
 # CLAUDE.md — Carla Odontotec WhatsApp Agent
 
-## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-19: FASE 2 EN VUELO (inbox 849 creado, falta Meta + e2e)
+## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-19: FASE 2 EN VUELO (inbox 849 creado, falta override en Meta + e2e)
 
 **En una línea:** el cliente entregó el número oficial, el inbox de Chatwoot ya está creado, y
-**la migración NO requiere tocar código** — falta pegar el webhook en Meta y probar.
+**la migración NO requiere tocar código** — falta el **override de webhook por número** en Meta y probar.
+
+⚠️ **El paso de Meta NO es el que decía este archivo.** El 849 comparte App y WABA con un bot de
+producción ajeno (Pharmaol, `809-343-1368`); cambiar el webhook del App lo dejaría mudo. Leer el
+bloque 🚨 antes de abrir Meta.
 
 ### Datos del número nuevo (Fase 2)
 
@@ -11,11 +15,65 @@
 |---|---|
 | Número | `+18494107913` |
 | Phone Number ID | `1242049598998643` |
-| WABA ID | `935606856224223` |
+| WABA ID | `935606856224223` ("Distribuidora Pharma-OL") |
+| App ID | `919228577909715` ("Pharma-OL Integration") |
 | Token permanente | System User "Karla BOT" (no está en el repo) |
 | Inbox Chatwoot | `Cliente Dental - 849` (cuenta 3) |
 | Webhook URL | `https://testagente1-chatwoot.oyfspa.easypanel.host/webhooks/whatsapp/+18494107913` |
 | Verify Token | NO se guarda acá (credencial). Está en Chatwoot → Settings → Inboxes → `Cliente Dental - 849`. ⚠️ quedó escrito en un chat — regenerar tras el e2e |
+
+### 🚨 EL 849 COMPARTE APP Y WABA CON UN BOT EN PRODUCCIÓN QUE NO ES NUESTRO
+
+**Leer esto ANTES de tocar nada en Meta.** La WABA `935606856224223` tiene DOS números:
+
+| Número | Phone Number ID | Quién lo atiende |
+|---|---|---|
+| `+1 809-343-1368` | `1240470792481915` | **bot Farmaol EN PRODUCCIÓN**, CRM propio del usuario ("Vocero") → `https://farmaol.sapiensbots.com/webhook`. Calidad High. **NO ROMPER.** |
+| `+1 849-410-7913` | `1242049598998643` | Carla (este repo) → Chatwoot. Estado "In Review" al 2026-08-19. |
+
+> 💥 **YA PASÓ UNA VEZ (2026-08-19).** Crear el inbox de Chatwoot para el 849 dejó **mudo al 809 de
+> Farmaol** durante horas: el Embedded Signup de Chatwoot escribe el `override_callback_uri`
+> **a nivel de WABA**, y como ningún número tenía override propio, se aplicó a los dos.
+> Fallo SILENCIOSO — sin error, sin alerta, invisible desde Chatwoot.
+> **Se arregló con `POST /935606856224223/subscribed_apps` con CUERPO VACÍO** (🚫 nunca `DELETE`,
+> eso desuscribe la app entera). Detalle: [[incidente-chatwoot-embedded-signup-tumbo-farmaol-2026-08-19]].
+> **Regla:** tras CUALQUIER cambio de webhook, probar por WhatsApp **todos** los números de la WABA.
+
+⚠️ **NUNCA cambiar el Callback URL en `App → WhatsApp → Configuration → Webhook → Edit`.** Ese campo es
+**a nivel de APP**: apunta hoy a `farmaol.sapiensbots.com/webhook` y sirve a los DOS números. Cambiarlo
+por la URL de Chatwoot deja **mudo al 809-343-1368** (sus mensajes se irían a Chatwoot, que no sabe
+qué hacer con ellos). Esa instrucción estaba escrita mal en este archivo hasta el 2026-08-19 y casi se
+ejecuta — el usuario la frenó a tiempo.
+
+**La forma correcta es un `webhook_configuration` override A NIVEL DE NÚMERO.** Precedencia de Meta:
+`número → WABA → app`. Poniéndole override solo al 849, el 809 sigue heredando el webhook del App sin
+que se toque un solo campo de su configuración.
+
+```bash
+# LEER primero (solo lectura, no cambia nada)
+curl -s 'https://graph.facebook.com/v25.0/1242049598998643?fields=webhook_configuration' \
+  -H 'Authorization: Bearer <TOKEN_KARLA_BOT>'
+
+# ESCRIBIR el override (solo afecta al 849)
+curl -X POST 'https://graph.facebook.com/v25.0/1242049598998643' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <TOKEN_KARLA_BOT>' \
+  -d '{
+    "webhook_configuration": {
+      "override_callback_uri": "https://testagente1-chatwoot.oyfspa.easypanel.host/webhooks/whatsapp/+18494107913",
+      "verify_token": "<VERIFY_TOKEN_DEL_INBOX_849>"
+    }
+  }'
+
+# REVERTIR si algo sale mal (vuelve a heredar del App)
+#   mismo POST con "override_callback_uri": ""
+```
+
+- El **token** sale de Meta → Business Settings → System users → "Karla BOT". No está en el repo ni en `.env`.
+- **`messages` NO hay que suscribirlo de nuevo:** el override cambia el DESTINO, no la SUSCRIPCIÓN. Ya
+  está suscrito a nivel App (por eso el 809 funciona).
+- Si el e2e falla, revisar que el 849 haya salido de **"In Review"** antes de culpar al webhook.
+- Doc: https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/override/
 
 ### ⚠️ La migración NO necesita cambios de código — verificado leyendo main.py
 
@@ -30,15 +88,49 @@
 
 ### PENDIENTE inmediato (por orden)
 
-1. **Meta** → App → WhatsApp → Configuration → Webhooks → Edit: pegar Callback URL + Verify Token →
-   **Verify and save**. Después, en **Webhook fields**, suscribir **`messages`** (esto se saltea seguido:
-   sin `messages` todo se ve verde y no llega ni un mensaje).
-2. **E2E:** WhatsApp al 849 → Carla contesta sola. Luego agendar/reagendar real.
-3. **Solo tras el 100%:** apagar el inbox viejo. Nunca antes.
+1. ✅ **HECHO 2026-08-19** — override de webhook puesto **en el número 849** (`phone_number` →
+   Chatwoot). Verificado por API: el 849 muestra `phone_number` + `application`; el 809 solo
+   `application` → farmaol. Farmaol probado por WhatsApp y **contestando**.
+2. ✅ **E2E BÁSICO OK 2026-08-19** — WhatsApp al 849 → llega a Chatwoot (inbox `Cliente Dental - 849`)
+   → **Carla contesta sola**. Cadena completa verificada en vivo. El 809 de Farmaol probado en
+   paralelo y contestando. **PENDIENTE del e2e: agendar/reagendar real** contra Dentidesk.
+   - ℹ️ **Rareza esperada, NO es bug:** en el **celular** WhatsApp puede mostrar el chat en modo
+     lectura si el 849 no está en los contactos (protección anti-spam del app). Por escritorio va
+     normal. Se resuelve guardando el contacto. **A los pacientes no les pasa** — ellos entran por
+     el QR / `wa.me/18494107913`, que abre el chat con el campo de escritura habilitado.
+   - Recordatorio: **probar SIEMPRE los dos números** tras cualquier cambio de webhook (bloque 🚨).
+3. **Solo tras el 100%:** apagar el número viejo de Carla `+1 809-977-9329` (WABA "Promolab
+   Laboratorio Promocional", ID `1414517500410070` — otra WABA, no se toca hasta el final). Nunca antes.
 4. **Avisarle al cliente:** el 849 ya NO abre en la app de WhatsApp del celular (un número vive en la
    app O en la Cloud API, no en ambas). La ventana para ver las conversaciones es **Chatwoot**. Decirlo
    ANTES de que lo descubran solos y crean que se rompió algo. El QR que muestra Chatwoot es
    `wa.me/18494107913` — para que el PACIENTE lo escanee; no hay emparejamiento por QR en Cloud API.
+
+## 🩹 (2026-08-19) Guard del autocompletar de `#rut` — el 11-dígitos NO cubría este caso
+
+**Descubierto durante el e2e del 849:** el guardrail de 11 dígitos vive en el AGENTE y valida lo que
+Carla *escribe*. No cubre lo que el autocompletar de Dentidesk *hace después*.
+
+**Mecanismo (leído en código + confirmado por el historial del 22-jul):** `_type_rut_recognize`
+teclea la cédula y presiona Enter para "cerrar la selección". Pero si el dropdown dejó resaltada la
+fila de un registro viejo de **cédula corta** (`0310` matchea por prefijo a `03102778092`), el Enter
+**la SELECCIONA**: Dentidesk sobrescribe `#rut` con la cédula corta y pone `#id_paciente` en la ficha
+EQUIVOCADA. La función devolvía `True` ("paciente reconocido") porque solo miraba `#id_paciente != 0`,
+**nunca DE QUIÉN** → la cita se creaba en la ficha de otra persona, sin error visible.
+
+**Fix:** tras el Enter se relee `#rut`; si los dígitos no son los tecleados, se lanza
+`CedulaAutocompletarHijack` **antes** de tocar `#btn_guardar_cita`. Comparación solo por dígitos
+(Dentidesk reformatea el RUT). Tests: 4 casos (hijack, reformateo, paciente nuevo, placeholder `1-9`).
+**Suite 128 pasan** (los 6+2 de respx/py3.14 siguen preexistentes).
+
+⚠️ **Va en el contenedor `dentidesk-daemon`** — la creación de cita corre ahí, no en `odontotec`.
+
+**Lo que el guard NO hace:** no limpia la base ni elige la fila correcta. Solo evita agendar mal.
+- **Pendiente del cliente:** borrar los registros de cédula incompleta (`carlaodontotec` no tiene
+  permiso de borrar). El usuario quedó en pedírselo el 2026-08-19.
+- **Mejora futura (necesita ver el DOM por VNC):** en vez de Enter a ciegas, **clickear la fila cuya
+  cédula coincide EXACTA** con los 11 dígitos → enlazaría siempre la ficha correcta aunque existan
+  duplicados. No se construyó: falta el selector del dropdown.
 
 ## 🔍 (2026-08-18) El flapping "daemon caído" de agosto era FALSA ALARMA — causa raíz encontrada
 
