@@ -104,6 +104,22 @@ Con eso los dos reciben: daemon caído/recuperado, LLM caído, conversación est
 escalada a humano. ⚠️ La clínica recibirá también los avisos técnicos; si molesta, hay que separar
 canales (otra env var + código).
 
+### 🧹 PRIMERA TAREA DE LA PRÓXIMA SESIÓN — limpiar env vars basura de `odontotec`
+
+Visto en la captura del Environment de `odontotec` (2026-08-20), **decidido dejarlo para la próxima
+sesión**. NO tocar en caliente:
+
+- **`SMTP_*` DUPLICADO con contraseñas DISTINTAS**: líneas 14-17 (`SMTP_PASS=rclouvjgqdewojvf`) y
+  otra vez 28-31 (`SMTP_PASS=luzlnkrpzamfuojd`). En un archivo de entorno **gana la última**, así
+  que hoy manda la de la línea 31 — y como los correos del watchdog llegan, ESA es la buena.
+  ⚠️ **Trampa:** si alguien borra el bloque de abajo "porque está repetido", las alertas mueren EN
+  SILENCIO. Acción: borrar las líneas **14-17** (las tapadas), conservar 28-31, Save + Deploy.
+- **`EMAIL_CLINIC=contactoodontotec@gmail.com`** (línea 19): **no lo lee ningún código** (verificado
+  por grep). Basura vieja, quitar.
+- ℹ️ `WATCHDOG_ALERT_EMAIL` con los dos correos quedó puesto en `odontotec` (línea 32) el 2026-08-20.
+  Primero se puso por error en `dentidesk-daemon` — si sigue ahí, quitarla (no hace nada: el
+  watchdog corre en `odontotec`).
+
 ### ⚠️ Promesa falsa que sigue en el prompt (decisión del usuario pendiente)
 
 GUION A y A2 dicen *"Le recordaremos su cita por teléfono, WhatsApp y por su email"*, pero los
