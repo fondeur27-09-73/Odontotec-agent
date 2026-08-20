@@ -127,3 +127,38 @@ def test_fecha_ilegible_es_lenient(valor):
     """No parsea -> deja pasar. _within_clinic_hours ya funciona así; bloquear aquí mataría
     citas legítimas por un formato raro."""
     assert _fecha_no_pasada(valor)[0] is True
+
+
+def test_alerta_va_a_varios_destinatarios(monkeypatch):
+    """WATCHDOG_ALERT_EMAIL con varios correos -> la alerta le llega a todos (técnico + clínica).
+    Cubre las tres alertas por igual: daemon caído, LLM caído y conversación estancada, porque
+    todas salen por send_dev_alert."""
+    from integrations import alerts
+    monkeypatch.setenv("WATCHDOG_ALERT_EMAIL", "fondeur28@gmail.com, contactoodontotec@gmail.com")
+    monkeypatch.setenv("SMTP_HOST", "smtp.test")
+    monkeypatch.setenv("SMTP_USER", "u")
+    monkeypatch.setenv("SMTP_PASS", "p")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    enviados = []
+
+    class _FakeSMTP:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def starttls(self): pass
+        def login(self, *a): pass
+        def send_message(self, msg): enviados.append(msg["To"])
+
+    # OJO: send_dev_alert está stubbeada por el fixture autouse _reset; se prueba _send_email.
+    monkeypatch.setattr(alerts.smtplib, "SMTP", _FakeSMTP)
+    assert alerts._send_email("[CARLA-WATCHDOG] prueba", "cuerpo") is True
+    assert enviados == ["fondeur28@gmail.com, contactoodontotec@gmail.com"]
+
+
+def test_alerta_sin_destinatarios_no_envia(monkeypatch):
+    from integrations import alerts
+    monkeypatch.setenv("WATCHDOG_ALERT_EMAIL", "  ,  ")
+    monkeypatch.setenv("SMTP_HOST", "smtp.test")
+    monkeypatch.setenv("SMTP_USER", "u")
+    monkeypatch.setenv("SMTP_PASS", "p")
+    assert alerts._send_email("asunto", "cuerpo") is False

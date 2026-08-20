@@ -78,14 +78,16 @@ OPENAI_TOOLS = [
                     "patient_name": {"type": "string", "description": "Nombre completo del paciente"},
                     "patient_phone": {"type": "string", "description": "Teléfono del paciente"},
                     "cedula": {"type": "string", "description": "Cédula del paciente"},
-                    "specialty": {"type": "string", "description": "general|ortodoncia|endodoncia|cirugia|protesis|odontopediatria"},
+                    "specialty": {"type": "string", "description": "general|ortodoncia|endodoncia|cirugia|protesis|odontopediatria|periodoncia"},
                     "procedimiento": {"type": "string", "description": "Tratamiento concreto que pidió el paciente, en palabras: ej 'Limpieza dental', 'Extracción de muela', 'Tratamiento de canal', 'Brackets'"},
                     "day": {"type": "string", "description": "Día de la cita en texto, ej: sábado 27 de junio"},
                     "time": {"type": "string", "description": "Hora de la cita, ej: 10:00 AM"},
                     "fecha_iso": {"type": "string", "description": "Fecha de la cita en formato ISO YYYY-MM-DD, calculada a partir de la fecha de hoy indicada en el prompt. Ej: 2026-06-29"},
-                    "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina (default arroyo_hondo)"}
+                    "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina (default arroyo_hondo)"},
+                    "doctor": {"type": "string", "description": "OBLIGATORIO. Nombre EXACTO del profesional de Dentidesk con el que se agenda, elegido por usted del listado DOCTORES POR ESPECIALIDAD del prompt (ej: 'Dr. Ortodoncia Ortodoncia', 'Dr. General General', 'Dra. Aimer Cedano'). Ortodoncia -> 'Dr. Ortodoncia Ortodoncia'; limpieza/caries/extracción simple/dolor -> 'Dr. General General'. PROHIBIDO inventar un nombre que no esté en ese listado."},
+                    "cita_para_tercero": {"type": "boolean", "description": "OBLIGATORIO. true si el paciente que va a asistir NO es quien escribe por WhatsApp (cita de un primo, hijo, hermano, esposa...). En ese caso patient_name y cedula DEBEN ser los del TERCERO que asistirá; PROHIBIDO usar el nombre de quien escribe, el que devolvió get_patient, o el de un paciente ya registrado. false solo si la cita es para quien escribe."}
                 },
-                "required": ["patient_name", "patient_phone", "specialty", "procedimiento", "day", "time", "fecha_iso"]
+                "required": ["patient_name", "patient_phone", "specialty", "procedimiento", "day", "time", "fecha_iso", "cita_para_tercero", "doctor"]
             }
         }
     },
@@ -105,6 +107,7 @@ OPENAI_TOOLS = [
                     "time": {"type": "string", "description": "Nueva hora, ej: 10:00 AM"},
                     "specialty": {"type": "string", "description": "SOLO si el paciente cambia de tratamiento: la NUEVA especialidad del sistema (general|ortodoncia|endodoncia|cirugia|protesis|odontopediatria). Cambia el doctor de la cita al de esa especialidad. Omitir si no cambia el tratamiento."},
                     "procedimiento": {"type": "string", "description": "SOLO si el paciente cambia de tratamiento: el NUEVO tratamiento en palabras (ej 'Limpieza dental'). Omitir si no cambia el tratamiento."},
+                    "nuevo_doctor": {"type": "string", "description": "SOLO si el paciente cambia de tratamiento: el NUEVO profesional, nombre EXACTO del listado de Dentidesk (ej 'Dr. Ortodoncia Ortodoncia'). Omitir si la cita sigue con el mismo doctor."},
                     "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina"}
                 },
                 "required": ["id_agenda", "fecha_actual_iso", "patient_name", "fecha_iso", "time"]
@@ -140,7 +143,7 @@ OPENAI_TOOLS = [
                     "cedula": {"type": "string", "description": "Cédula del paciente (opcional)"},
                     "telefono": {"type": "string", "description": "Teléfono del paciente (opcional)"},
                     "nombre": {"type": "string", "description": "Nombre y apellido del paciente (opcional). Fallback para citas de terceros/familiares. Requiere al menos nombre + apellido."},
-                    "dias": {"type": "integer", "description": "Cuántos días hacia adelante escanear desde hoy (default 30, máx 60)"},
+                    "dias": {"type": "integer", "description": "Cuántos días hacia adelante escanear desde hoy (default 10)"},
                     "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina (default arroyo_hondo)"}
                 },
                 "required": []

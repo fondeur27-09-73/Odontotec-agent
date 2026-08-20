@@ -180,3 +180,13 @@ def test_run_agent_respuesta_vacia_revienta_en_vez_de_devolver_vacio():
         from agent.claude import run_agent
         with pytest.raises(RuntimeError, match="no devolvió texto"):
             run_agent([{"role": "user", "content": "Hola"}], 42)
+
+
+def test_agendar_exige_declarar_si_la_cita_es_de_un_tercero():
+    """El esquema REAL que ve el modelo es OPENAI_TOOLS (agent/tools.py ya no existe).
+    cita_para_tercero tiene que ser obligatorio: es el guardrail contra agendar a nombre de
+    quien escribe cuando la cita es de un familiar (bug 2026-08-19)."""
+    from agent.claude import OPENAI_TOOLS
+    fn = next(t for t in OPENAI_TOOLS if t["function"]["name"] == "agendar_cita_dentidesk")["function"]
+    assert "cita_para_tercero" in fn["parameters"]["properties"]
+    assert "cita_para_tercero" in fn["parameters"]["required"]

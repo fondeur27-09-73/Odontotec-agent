@@ -30,10 +30,18 @@ def _env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
+def _destinatarios() -> list[str]:
+    """WATCHDOG_ALERT_EMAIL admite VARIOS destinos separados por coma o punto y coma
+    ("dev@x.com, clinica@y.com"): la misma alerta le llega al técnico y a la clínica. Un solo
+    correo es un punto ciego — si esa persona no lo mira, nadie se entera."""
+    crudo = _env("WATCHDOG_ALERT_EMAIL").replace(";", ",")
+    return [d.strip() for d in crudo.split(",") if d.strip()]
+
+
 def _send_email(subject: str, message: str) -> bool:
     """Usa las SMTP_* genéricas (un solo servidor de correo para la app, no uno por feature).
     Solo WATCHDOG_ALERT_EMAIL es propio: es el destino, y va al operador, no a un paciente."""
-    to = _env("WATCHDOG_ALERT_EMAIL")
+    to = _destinatarios()
     host = _env("SMTP_HOST")
     user = _env("SMTP_USER")
     password = _env("SMTP_PASS")
@@ -42,7 +50,7 @@ def _send_email(subject: str, message: str) -> bool:
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = _env("EMAIL_FROM") or user
-    msg["To"] = to
+    msg["To"] = ", ".join(to)
     msg.set_content(message)
     port = int(_env("SMTP_PORT", "587"))
     # 465 = SSL directo; 587/25 = STARTTLS. Elegir mal cuelga la conexión hasta el timeout.
@@ -55,7 +63,7 @@ def _send_email(subject: str, message: str) -> bool:
             s.starttls()
             s.login(user, password)
             s.send_message(msg)
-    logger.info(f"send_dev_alert: email enviado a {to}")
+    logger.info(f"send_dev_alert: email enviado a {', '.join(to)}")
     return True
 
 

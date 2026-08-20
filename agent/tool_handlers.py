@@ -138,6 +138,55 @@ def _cedula_dominicana_ok(cedula: str) -> tuple[bool, str]:
                    "¿Me la puede enviar de nuevo, completa?")
 
 
+def _norm_nombre(s: str) -> str:
+    """Nombre en minúsculas, sin tildes, sin dobles espacios — para comparar, no para mostrar."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode()
+    return " ".join(s.lower().split())
+
+
+def _datos_del_paciente_real(phone: str, patient_name: str, cedula: str,
+                             cita_para_tercero: bool) -> tuple[bool, str]:
+    """Guardrail de CITA DE TERCERO (bug 2026-08-19, caso Karen Ferreras).
+
+    Cuando quien escribe pide cita para un primo/hijo/hermano, el modelo tiende a reusar el nombre
+    del contacto de WhatsApp (o el que get_patient devolvió) y agenda a nombre de QUIEN LLAMA, no
+    del paciente que va a asistir. La cita queda en la ficha equivocada sin ningún error visible.
+    Si la cita se declaró para un tercero pero el nombre o la cédula son los del titular del
+    teléfono, se corta ANTES de escribir. Devuelve (ok, mensaje_para_el_modelo)."""
+    if not cita_para_tercero:
+        return True, ""
+    titular = db.get_patient(phone) or {}
+    ced_titular = "".join(c for c in str(titular.get("cedula", "")) if c.isdigit())
+    ced_cita = "".join(c for c in str(cedula) if c.isdigit())
+    choca_nombre = _norm_nombre(titular.get("name")) and         _norm_nombre(titular.get("name")) == _norm_nombre(patient_name)
+    choca_cedula = bool(ced_titular) and ced_titular == ced_cita
+    if choca_nombre or choca_cedula:
+        return False, ("La cita es para otra persona, pero el nombre/cédula enviados son los de "
+                       "quien escribe. Pida el nombre completo y la cédula del PACIENTE que va a "
+                       "asistir (no los de quien escribe) y vuelva a registrar la cita.")
+    return True, ""
+
+
+def _elegir_doctor(doctor: str, specialty: str):
+    """Doctor con el que se agenda. Carla ELIGE del listado de Dentidesk (parámetro `doctor`);
+    si no eligió, cae al doctor por defecto de la especialidad. Devuelve el needle (str) o un dict
+    de error listo para retornar. Un nombre que no está en el listado se rechaza ANTES de tocar
+    Dentidesk: mejor pedirle que lo corrija que agendar con quien no era."""
+    if doctor:
+        real = _doctor_de_la_lista(doctor)
+        if real is None:
+            return {"success": False, "error": "doctor_desconocido",
+                    "message": (f"'{doctor}' no está en el listado de profesionales de Dentidesk. "
+                                f"Elija uno de la lista de doctores por especialidad.")}
+        return real
+    por_defecto = _resolve_doctor(specialty)
+    if por_defecto is None:
+        return {"success": False, "error": "doctor_no_mapeado",
+                "message": f"No hay doctor configurado para la especialidad '{specialty}'."}
+    return por_defecto
+
+
 def _agendar_cita_dentidesk(
     patient_name: str,
     patient_phone: str,
@@ -148,12 +197,17 @@ def _agendar_cita_dentidesk(
     procedimiento: str = "",
     fecha_iso: str = "",
     sucursal: str = "arroyo_hondo",
+    cita_para_tercero: bool = False,
+    doctor: str = "",
 ) -> dict:
     """ESCRITURA (UI Playwright): crea una cita NUEVA en Dentidesk. Backstop de fecha/horario antes
     de tocar nada. Bajo candado DENTIDESK_ALLOW_WRITES (no opera fuera del campo de simulación)."""
     ok, msg = _cedula_dominicana_ok(cedula)
     if not ok:
         return {"success": False, "error": "cedula_invalida", "message": msg}
+    ok, msg = _datos_del_paciente_real(patient_phone, patient_name, cedula, cita_para_tercero)
+    if not ok:
+        return {"success": False, "error": "datos_del_titular", "message": msg}
     ok, msg = _fecha_no_pasada(fecha_iso)
     if not ok:
         return {"success": False, "error": "fecha_pasada", "message": msg}
@@ -164,10 +218,9 @@ def _agendar_cita_dentidesk(
     if time24 is None:
         return {"success": False, "error": "hora_invalida",
                 "message": f"No entendí la hora '{time}'. Pida la hora de nuevo, ej: 10:00 AM."}
-    doctor = _resolve_doctor(specialty)
-    if doctor is None:
-        return {"success": False, "error": "doctor_no_mapeado",
-                "message": f"No hay doctor configurado para la especialidad '{specialty}'."}
+    doctor = _elegir_doctor(doctor, specialty)
+    if isinstance(doctor, dict):
+        return doctor
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
     # Idempotencia (best-effort): si el paciente YA tiene cita ese día en la agenda real, NO crear
     # otra. Cubre el doble-clic del modelo (llamar la tool dos veces pese al "UNA SOLA VEZ") y dos
@@ -177,7 +230,9 @@ def _agendar_cita_dentidesk(
         existente = None
         if cedula:
             existente = dentidesk.find_by_cedula(cedula, fecha_iso, loc)
-        if existente is None and patient_phone:
+        # En cita de tercero el teléfono es el de quien escribe: buscar por él encontraría la cita
+        # DEL TITULAR ese día y abortaría la del familiar. Solo la cédula (del tercero) sirve.
+        if existente is None and patient_phone and not cita_para_tercero:
             existente = dentidesk.find_by_phone(patient_phone, fecha_iso, loc)
         if existente:
             return {"success": True, "ya_existia": True,
@@ -205,6 +260,7 @@ def _reagendar_cita_dentidesk(
     doctor: str = "",
     specialty: str = "",
     procedimiento: str = "",
+    nuevo_doctor: str = "",
 ) -> dict:
     """ESCRITURA (UI Playwright): mueve una cita existente a otra fecha/hora (la API no puede).
     Backstop de horario. Bajo candado DENTIDESK_ALLOW_WRITES. fecha_actual_iso/patient_name/doctor
@@ -230,11 +286,10 @@ def _reagendar_cita_dentidesk(
     # Cambio de tratamiento: resolver la nueva especialidad al doctor nuevo (misma lógica que agendar).
     # "" (general = personal fijo) es válido y significa NO tocar el doctor; None = especialidad mala.
     nuevo_doctor_label = ""
-    if specialty:
-        nuevo_doctor_label = _resolve_doctor(specialty)
-        if nuevo_doctor_label is None:
-            return {"success": False, "error": "doctor_no_mapeado",
-                    "message": f"No hay doctor configurado para la especialidad '{specialty}'."}
+    if nuevo_doctor or specialty:
+        nuevo_doctor_label = _elegir_doctor(nuevo_doctor, specialty)
+        if isinstance(nuevo_doctor_label, dict):
+            return nuevo_doctor_label
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
     res = dentidesk_playwright.move_appointment(
         id_agenda=id_agenda, fecha_actual_iso=fecha_actual_iso, patient_name=patient_name,
@@ -258,17 +313,51 @@ _LOCATION_ALIAS = {
 # lista del cliente (agent/prompts.py). Sobreescribible completo por env DENTIDESK_DOCTOR_MAP (JSON
 # {"especialidad": "needle"}), p.ej. para fijar el personal de odontología general, que el cliente
 # maneja como personal fijo sin especialista.
+# Regla del cliente (2026-08-20): ortodoncia y odontología general NO se agendan con un
+# especialista de nombre propio. Dentidesk tiene fichas dedicadas para eso — nombres REALES vistos
+# en el listado de Profesionales del CRM (captura 2026-08-20):
+#   "Dr. Ortodoncia Ortodoncia" | "Dr. General General" | "Dr. Periodoncia Especialistas"
+# Los needles llevan las dos palabras a propósito: son únicos en la lista y no pueden colisionar
+# con ningún doctor de nombre propio. El default viejo de ortodoncia ("Cabrera") caía en la Dra.
+# Altemi Cabrera Sime, que NO es la ficha de ortodoncia — de ahí la cita mal agendada del 19-ago.
 _DOCTOR_DEFAULTS = {
-    "ortodoncia": "Cabrera",        # Dra. Altemi Cabrera Sime
+    "ortodoncia": "ortodoncia ortodoncia",      # ficha "Dr. Ortodoncia Ortodoncia"
+    "general": "general general",               # ficha "Dr. General General"
+    "periodoncia": "periodoncia especialistas",  # ficha "Dr. Periodoncia Especialistas"
     "cirugia": "Angel Lee",         # Dr. Angel Lee
     "endodoncia": "Cedano",         # Dra. Aimer Cedano
     "protesis": "Adriana Abreu",    # Dra. Adriana Abreu
     "odontopediatria": "Bastidas",  # Dra. Daniela Bastidas
-    # "general" = "" a propósito: regla del cliente (2026-07-05) — odontología general la atiende
-    # personal FIJO y la cita NO se registra por nombre de doctor. "" = no tocar #dentista_cita
-    # (queda el valor que Dentidesk ponga por defecto en el modal).
-    "general": "",
 }
+
+
+# Listado REAL de Profesionales de Dentidesk (sidebar de la agenda, captura 2026-08-20). Carla
+# elige de aquí; esto es el candado que impide que invente un doctor que no existe: un nombre fuera
+# de esta lista no llega nunca a Playwright.
+_DOCTORES_DENTIDESK = [
+    "Adriana Abreu", "Aimer Cedano", "Altemi Cabrera Sime", "Angel Lee", "Anibel Chalas",
+    "Daniela Bastidas", "Disiris Santana", "Edra Vargas", "General General", "Jeffray Lora",
+    "Julia Montilla", "Marcelle Morales", "Mirleinis Casado", "Monica Vargas",
+    "Ortodoncia Ortodoncia", "Periodoncia Especialistas", "Roner Capellan",
+]
+
+
+def _doctor_de_la_lista(doctor: str) -> str | None:
+    """Empareja lo que el modelo eligió contra el listado real de Dentidesk. Tolera 'Dr./Dra.',
+    tildes y mayúsculas ("Dra. Altemi Cabrera Sime" -> "Altemi Cabrera Sime"). Devuelve el nombre
+    canónico, o None si no está en la lista (el caller lo rechaza sin tocar Dentidesk)."""
+    n = _norm_nombre(doctor)
+    for pref in ("dra. ", "dr. ", "dra ", "dr "):
+        if n.startswith(pref):
+            n = n[len(pref):]
+            break
+    if not n:
+        return None
+    for real in _DOCTORES_DENTIDESK:
+        if _norm_nombre(real) == n:
+            return real
+    coincidencias = [r for r in _DOCTORES_DENTIDESK if n in _norm_nombre(r)]
+    return coincidencias[0] if len(coincidencias) == 1 else None
 
 
 def _resolve_doctor(specialty: str) -> str | None:

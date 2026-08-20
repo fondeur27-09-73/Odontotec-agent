@@ -423,8 +423,12 @@ def _select_doctor_verified(page, doctor_label: str, attempts: int = 3) -> None:
         const sel = document.getElementById('dentista_cita');
         if (!sel) return null;
         const n = norm(needle);
-        const opt = Array.from(sel.options).find(
-            o => !o.disabled && o.value && o.value !== '0' && norm(o.text).includes(n));
+        const opts = Array.from(sel.options).filter(
+            o => !o.disabled && o.value && o.value !== '0');
+        // Coincidencia EXACTA primero: si el needle es el nombre completo de una ficha
+        // ("DOCTOR GENERAL", "DR. ORTODONCIA"), gana esa y no otra que solo la contenga.
+        const opt = opts.find(o => norm(o.text) === n) ||
+                    opts.find(o => norm(o.text).includes(n));
         return opt ? opt.value : null;
     }""" % _NORMALIZE_JS
     check_selected_js = """(needle) => {

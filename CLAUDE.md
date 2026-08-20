@@ -1,6 +1,118 @@
 # CLAUDE.md — Carla Odontotec WhatsApp Agent
 
-## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-19 CERRADA: FASE 2 VIVA + incidente Farmaol resuelto
+## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-20: 2 bugs de agendado arreglados + limpieza del prompt
+
+**En una línea:** Carla agendaba **a nombre de quien escribe** cuando la cita era de un familiar, y
+mandaba **ortodoncia a una cirujana**. Las dos cosas arregladas en código + prompt. ⏳ **falta Deploy
+de `odontotec`.**
+
+| Qué | Estado |
+|---|---|
+| Guardrail de cita para un TERCERO (`cita_para_tercero`) | ✅ código + prompt + tests |
+| Carla ELIGE el doctor del listado real de Dentidesk (`doctor`) | ✅ código + prompt + tests |
+| Fichas genéricas `Dr. Ortodoncia Ortodoncia` / `Dr. General General` | ✅ |
+| Alertas del watchdog a 2 correos | ✅ código — ⏳ **falta poner la env var** |
+| `agent/tools.py` (esquema muerto) borrado | ✅ |
+| Deploy de `odontotec` | ❌ **PENDIENTE** |
+
+Suite: **140 pasan** (los 6+2 de respx/py3.14 siguen preexistentes).
+
+### 🐛 BUG 1 — la cita de un familiar se agendaba a nombre de quien escribía
+
+Caso real (2026-08-19): **Karen Ferreras** escribió para agendarle a un primo. Carla creó la cita
+**a nombre de Karen**, no del primo. Ya había pasado antes (el usuario pidiendo cita para su
+hermano). Causa: el PASO 2 asumía que el paciente = quien escribe; `get_patient(phone)` devolvía a
+Karen y ese nombre se arrastraba hasta Dentidesk. Si además ya estaba registrada, le colgaba otra
+cita a SU ficha.
+
+**Fix, 3 capas:**
+1. **Prompt — PASO 2B nuevo** (obligatorio, antes de PASO 3): *"¿La cita es para usted o para otra
+   persona?"*. Si es de un tercero: pedir nombre + cédula DEL PACIENTE, prohibido usar el nombre de
+   WhatsApp / el de `get_patient` / el de un paciente ya registrado, prohibido `save_patient` con
+   los datos del tercero (dañaría el expediente de quien escribe). Regla crítica **2c**.
+2. **Tool `agendar_cita_dentidesk`: campo `cita_para_tercero` OBLIGATORIO.** El modelo tiene que
+   declarar de quién es la cita en cada agendado.
+3. **Código — `_datos_del_paciente_real()`**: si dice "es de un tercero" pero manda el nombre o la
+   cédula del titular del teléfono → corta con `error: datos_del_titular` ANTES de tocar Playwright.
+   De regalo: en cita de tercero ya NO se busca duplicado por el teléfono de quien escribe (antes
+   encontraba la cita del titular ese día y abortaba la del familiar).
+
+### 🐛 BUG 2 — ortodoncia agendada con una cirujana
+
+`_DOCTOR_DEFAULTS["ortodoncia"]` era `"Cabrera"` → matcheaba a **Dra. Altemi Cabrera Sime**, que NO
+es la ficha de ortodoncia. Y `"general"` era `""` = *no tocar el desplegable* → se quedaba el doctor
+que Dentidesk pusiera por defecto.
+
+**En Dentidesk hay fichas dedicadas** (nombres REALES, vistos en el sidebar de Profesionales):
+`Dr. Ortodoncia Ortodoncia` · `Dr. General General` · `Dr. Periodoncia Especialistas`.
+
+**Fix — ahora Carla ELIGE el doctor, no un mapeo ciego:**
+- Campo `doctor` **obligatorio** en `agendar_cita_dentidesk` (y `nuevo_doctor` opcional al
+  reagendar). El prompt lleva el listado real agrupado por especialidad.
+- **Candado**: `_DOCTORES_DENTIDESK` + `_doctor_de_la_lista()` en `agent/tool_handlers.py`. Un
+  nombre fuera del listado → `doctor_desconocido`, **no toca Dentidesk**. Tolera "Dr./Dra." y tildes.
+- Sin elección → cae al default de la especialidad (red de seguridad, no el camino normal).
+- Test `test_fichas_genericas_estan_en_el_listado_real`: si un nombre cambia en Dentidesk, revienta
+  el test, no la producción con un paciente delante.
+- ⚙️ **Mecánica (para no confundirse):** Carla NO escribe el nombre en Dentidesk. Decide → el código
+  valida contra el listado → **Playwright SELECCIONA la opción del `<select #dentista_cita>`**, como
+  un humano con el cursor, y verifica que quedó puesta antes de Guardar.
+
+### 📋 LISTADO DE PROFESIONALES = LO QUE DIGA DENTIDESK (regla del usuario, 2026-08-20)
+
+No inventamos doctores ni especialidades: **la fuente de verdad es el sidebar de Profesionales de
+Dentidesk**. Si el cliente cambia un doctor allí, **tiene que avisarnos** para actualizar el prompt.
+Listado completo al 2026-08-20 (17, termina en Roner Capellan):
+
+| Especialidad | Doctores (nombre EXACTO) |
+|---|---|
+| ORTODONCIA | `Dr. Ortodoncia Ortodoncia` (ficha única) |
+| GENERAL | `Dr. General General` (ficha única) |
+| PERIODONCIA | `Dr. Periodoncia Especialistas` |
+| ENDODONCIA | Aimer Cedano · Anibel Chalas · Edra Vargas |
+| CIRUGÍA | Angel Lee · Disiris Santana · **Altemi Cabrera Sime** |
+| PRÓTESIS | Adriana Abreu · Jeffray Lora · Julia Montilla · Marcelle Morales |
+| ODONTOPEDIATRÍA | Daniela Bastidas |
+
+- **Dra. Ekaterina Fernandez ELIMINADA**: estaba en la lista vieja del cliente, **no existe en
+  Dentidesk**.
+- ⏳ **FALTA PREGUNTARLE AL CLIENTE la especialidad de 3 doctores** que sí están en Dentidesk:
+  **Dra. Mirleinis Casado**, **Dra. Monica Vargas**, **Dr. Roner Capellan**. Mientras tanto el
+  prompt le dice a Carla que NO los elija.
+
+### 🧹 Limpieza del prompt (basura que confundía)
+
+- **`agent/tools.py` BORRADO.** Era un segundo esquema de tools que **no importaba nadie** y estaba
+  desactualizado (sin `buscar_cita_proxima_dentidesk`, sin el campo `nombre`). ⚠️ **El esquema REAL
+  que ve el modelo es `OPENAI_TOOLS` en [agent/claude.py](agent/claude.py) — editar SIEMPRE ahí.**
+- **Número oficial**: `+1 809-977-9329` → **`+1 849-410-7913`** (confirmado por el usuario).
+- **PASO 3**: mapeo de especialidades explícito, con la línea que faltaba — *"limpieza DE ortodoncia
+  es ortodoncia; una limpieza normal NO es ortodoncia"*.
+- `dias` de `buscar_cita_proxima_dentidesk` decía "default 30" y el código usa 10. Alineado.
+
+### 📧 Watchdog — mismas alertas, ahora a DOS correos
+
+`WATCHDOG_ALERT_EMAIL` acepta varios destinos separados por coma (`integrations/alerts.py`,
+`_destinatarios()`). El watchdog en sí NO se tocó: sigue chequeando cada 5 min, umbral de paciente
+esperando **5 min** (`WATCHDOG_STALLED_MIN`), edge-trigger, sin spam.
+
+⏳ **PENDIENTE (EasyPanel → `odontotec` → Environment):**
+```
+WATCHDOG_ALERT_EMAIL=fondeur28@gmail.com,contactoodontotec@gmail.com
+```
+Con eso los dos reciben: daemon caído/recuperado, LLM caído, conversación estancada +5 min, y
+escalada a humano. ⚠️ La clínica recibirá también los avisos técnicos; si molesta, hay que separar
+canales (otra env var + código).
+
+### ⚠️ Promesa falsa que sigue en el prompt (decisión del usuario pendiente)
+
+GUION A y A2 dicen *"Le recordaremos su cita por teléfono, WhatsApp y por su email"*, pero los
+recordatorios (Fase 3) están **PAUSADOS** — hoy no sale ninguno. Es texto del cliente; no se tocó.
+Decidir: quitarlo hasta que Fase 3 esté viva, o dejarlo.
+
+---
+
+## 🟢 (previo) ARRANCAR AQUÍ — Sesión 2026-08-19 CERRADA: FASE 2 VIVA + incidente Farmaol resuelto
 
 **En una línea:** Carla ya contesta por el número oficial `849-410-7913`, y en el camino se descubrió
 y arregló que **crear el inbox de Chatwoot había dejado mudo a un bot de producción ajeno**.

@@ -125,13 +125,13 @@ def test_split_time_24h_rechaza_no_24h(raw):
 # --- _resolve_doctor: especialidad -> needle de doctor ---
 
 def test_resolve_doctor_defaults():
-    assert _resolve_doctor("ortodoncia") == "Cabrera"
+    assert _resolve_doctor("ortodoncia") == "ortodoncia ortodoncia"
     assert _resolve_doctor("CIRUGIA ") == "Angel Lee"
 
 
-def test_resolve_doctor_general_es_personal_fijo():
-    # Regla cliente 2026-07-05: general = personal fijo, "" = no seleccionar doctor.
-    assert _resolve_doctor("general") == ""
+def test_resolve_doctor_general_ficha_generica():
+    # Regla cliente 2026-08-20: general va a la ficha genérica "DOCTOR GENERAL".
+    assert _resolve_doctor("general") == "general general"
 
 
 def test_resolve_doctor_especialidad_desconocida():
@@ -142,7 +142,7 @@ def test_resolve_doctor_override_env(monkeypatch):
     monkeypatch.setenv("DENTIDESK_DOCTOR_MAP", '{"ortodoncia": "Casado"}')
     assert _resolve_doctor("ortodoncia") == "Casado"
     assert _resolve_doctor("endodoncia") == "Cedano"  # defaults sobreviven al override parcial
-    assert _resolve_doctor("general") == ""           # regla de personal fijo intacta
+    assert _resolve_doctor("general") == "general general"    # ficha genérica intacta
 
 
 def test_resolve_doctor_env_malformado_no_rompe(monkeypatch):
@@ -227,14 +227,14 @@ def test_tool_desconocida_devuelve_error():
     assert "error" in result
 
 
-def test_agendar_general_sin_doctor_llega_a_playwright():
-    # general = personal fijo: se agenda SIN seleccionar doctor (doctor_label="").
+def test_agendar_general_va_a_la_ficha_generica():
+    # general -> ficha genérica "DOCTOR GENERAL", no un especialista con nombre propio.
     with patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
                return_value={"success": True, "IdAgenda": "1000"}) as mock_pw:
         result = json.loads(handle_tool("agendar_cita_dentidesk",
                                         {**_BASE_ARGS, "specialty": "general", "time": "10:00 AM"}))
     assert result["success"] is True
-    assert mock_pw.call_args.kwargs["doctor_label"] == ""
+    assert mock_pw.call_args.kwargs["doctor_label"] == "general general"
 
 
 def test_agendar_especialidad_desconocida_no_llama_playwright():
@@ -255,7 +255,7 @@ def test_agendar_pasa_hora_24h_y_doctor_a_playwright():
     assert result["success"] is True
     kwargs = mock_pw.call_args.kwargs
     assert kwargs["time"] == "15:00"
-    assert kwargs["doctor_label"] == "Cabrera"
+    assert kwargs["doctor_label"] == "ortodoncia ortodoncia"
 
 
 def test_reagendar_pasa_hora_24h():
@@ -285,7 +285,7 @@ def test_reagendar_con_cambio_de_tratamiento_resuelve_doctor_nuevo():
     assert result["success"] is True
     kwargs = mock_pw.call_args.kwargs
     assert kwargs["doctor_label"] == "Cedano"            # doctor ACTUAL (para ubicar la tarjeta)
-    assert kwargs["nuevo_doctor_label"] == "Cabrera"     # doctor NUEVO (ortodoncia)
+    assert kwargs["nuevo_doctor_label"] == "ortodoncia ortodoncia"  # doctor NUEVO (ficha de ortodoncia)
     assert kwargs["nuevo_procedimiento"] == "Brackets"
 
 
@@ -507,3 +507,107 @@ def test_type_rut_recognize_no_revienta_con_placeholder_sin_digitos():
     page.input_value.return_value = "1-9"
     page.wait_for_function.side_effect = Exception("timeout")
     assert dp._type_rut_recognize(page, "1-9") is False
+
+
+# ── Citas de terceros (bug 2026-08-19: Carla agendó a nombre de quien escribía) ────────────────
+
+def test_agendar_tercero_con_datos_del_titular_no_llama_playwright():
+    """Cita declarada para un tercero pero con el nombre/cédula de quien escribe -> se corta."""
+    titular = {"name": "Karen Ferreras", "cedula": "03102778092"}
+    with patch("agent.tool_handlers.db.get_patient", return_value=titular), \
+         patch("agent.tool_handlers.dentidesk_playwright.create_appointment") as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk", {
+            **_BASE_ARGS, "patient_name": "karen  ferreras", "time": "10:00 AM",
+            "cita_para_tercero": True}))
+    assert result["success"] is False
+    assert result["error"] == "datos_del_titular"
+    mock_pw.assert_not_called()
+
+
+def test_agendar_tercero_con_datos_propios_del_tercero_si_agenda():
+    """Nombre y cédula del tercero (distintos a los del titular) -> agenda normal."""
+    titular = {"name": "Karen Ferreras", "cedula": "03102778092"}
+    with patch("agent.tool_handlers.db.get_patient", return_value=titular), \
+         patch("agent.tool_handlers.dentidesk.find_by_cedula", return_value=None), \
+         patch("agent.tool_handlers.dentidesk.find_by_phone") as mock_phone, \
+         patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
+               return_value={"IdAgenda": "1"}) as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk", {
+            **_BASE_ARGS, "patient_name": "José Gabriel Ramírez", "cedula": "00112345678",
+            "time": "10:00 AM", "cita_para_tercero": True}))
+    assert result["success"] is True
+    mock_pw.assert_called_once()
+    # En cita de tercero NO se busca por el teléfono de quien escribe: encontraría la cita del titular.
+    mock_phone.assert_not_called()
+
+
+def test_agendar_titular_no_dispara_el_guard():
+    """Cita propia con los datos del titular: normal, no es el caso del guard."""
+    titular = {"name": "Juan Pérez", "cedula": "03102778092"}
+    with patch("agent.tool_handlers.db.get_patient", return_value=titular), \
+         patch("agent.tool_handlers.dentidesk.find_by_cedula", return_value=None), \
+         patch("agent.tool_handlers.dentidesk.find_by_phone", return_value=None), \
+         patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
+               return_value={"IdAgenda": "1"}) as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk", {**_BASE_ARGS, "time": "10:00 AM"}))
+    assert result["success"] is True
+    mock_pw.assert_called_once()
+
+
+def test_doctor_generico_para_ortodoncia_y_general():
+    """Ortodoncia y general van a las fichas genéricas, no a un especialista con nombre propio."""
+    from agent.tool_handlers import _resolve_doctor
+    assert _resolve_doctor("ortodoncia") == "ortodoncia ortodoncia"
+    assert _resolve_doctor("general") == "general general"
+    assert _resolve_doctor("cirugia") == "Angel Lee"
+
+
+def test_ortodoncia_y_general_son_fichas_DISTINTAS():
+    """Regla del cliente: DR. ORTODONCIA es SOLO ortodoncia; limpieza/caries/general van a
+    DOCTOR GENERAL. Son dos fichas separadas — jamás la misma ni una contenida en la otra."""
+    from agent.tool_handlers import _resolve_doctor
+    orto, gen = _resolve_doctor("ortodoncia"), _resolve_doctor("general")
+    assert orto and gen and orto != gen
+    assert orto not in gen and gen not in orto
+
+
+# ── Carla elige el doctor del listado real de Dentidesk ───────────────────────────────────────
+
+def test_doctor_elegido_por_carla_llega_a_playwright():
+    with patch("agent.tool_handlers.dentidesk.find_by_cedula", return_value=None), \
+         patch("agent.tool_handlers.dentidesk.find_by_phone", return_value=None), \
+         patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
+               return_value={"IdAgenda": "1"}) as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk", {
+            **_BASE_ARGS, "time": "10:00 AM", "doctor": "Dra. Aimer Cedano"}))
+    assert result["success"] is True
+    # "Dra." y tildes se toleran; a Dentidesk va el nombre canónico del listado.
+    assert mock_pw.call_args.kwargs["doctor_label"] == "Aimer Cedano"
+
+
+def test_doctor_inventado_no_llama_playwright():
+    """Un doctor que no está en el listado de Dentidesk se rechaza ANTES de escribir."""
+    with patch("agent.tool_handlers.dentidesk_playwright.create_appointment") as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk", {
+            **_BASE_ARGS, "time": "10:00 AM", "doctor": "Dr. Fulano de Tal"}))
+    assert result["success"] is False
+    assert result["error"] == "doctor_desconocido"
+    mock_pw.assert_not_called()
+
+
+def test_sin_doctor_elegido_cae_al_default_de_la_especialidad():
+    with patch("agent.tool_handlers.dentidesk.find_by_cedula", return_value=None), \
+         patch("agent.tool_handlers.dentidesk.find_by_phone", return_value=None), \
+         patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
+               return_value={"IdAgenda": "1"}) as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk",
+                                        {**_BASE_ARGS, "time": "10:00 AM"}))
+    assert result["success"] is True
+    assert mock_pw.call_args.kwargs["doctor_label"] == "ortodoncia ortodoncia"
+
+
+def test_fichas_genericas_estan_en_el_listado_real():
+    """Los defaults tienen que existir en el listado de Dentidesk, o el agendado revienta en vivo."""
+    from agent.tool_handlers import _DOCTOR_DEFAULTS, _doctor_de_la_lista
+    for esp, needle in _DOCTOR_DEFAULTS.items():
+        assert _doctor_de_la_lista(needle) is not None, f"{esp} -> '{needle}' no está en Dentidesk"
