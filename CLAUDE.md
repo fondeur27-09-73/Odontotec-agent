@@ -57,10 +57,20 @@ curl -s -X POST localhost:8100/crear_cita -H 'Content-Type: application/json'   
    daba el sistema por sano porque solo mira `/session` (que devolvía 200). **Un `502` repetido en
    `crear_cita` es el síntoma más caro que existe: pacientes que no consiguen cita.** Hay que
    vigilarlo.
-5. **📋 PREGUNTARLE AL CLIENTE la especialidad de 3 doctores** que están en Dentidesk pero Carla NO
-   puede elegir hasta saberlo: **Dra. Mirleinis Casado**, **Dra. Monica Vargas**, **Dr. Roner
-   Capellan**. Recordarle también la regla: cada vez que cambien un doctor en Profesionales,
-   **tienen que avisarnos**.
+5. **📋 PREGUNTARLE AL CLIENTE — 4 preguntas sobre los doctores.** Mientras no conteste, Carla
+   trabaja con un listado incompleto:
+   - **¿Qué especialidad atiende cada uno?** Están en Dentidesk pero Carla NO puede elegirlos hasta
+     saberlo: **Dra. Mirleinis Casado**, **Dra. Monica Vargas**, **Dr. Roner Capellan**.
+   - **¿Y la Dra. Ekaterina Fernandez?** El cliente la dio como ODONTOPEDIATRÍA, pero **NO aparece
+     en el listado de Profesionales de Dentidesk**. ¿Ya no trabaja ahí, o falta registrarla en el
+     sistema? Se quitó del prompt por no estar en Dentidesk. ⚠️ **Si sigue trabajando, hay un
+     problema real: odontopediatría se queda con UNA sola doctora (Daniela Bastidas)** — y si ella
+     falta o se llena, no hay a quién agendar los niños.
+   - **La regla:** cada vez que cambien un doctor en Profesionales de Dentidesk (alta, baja o cambio
+     de especialidad), **tienen que avisarnos** para actualizar `agent/prompts.py`. Carla no se
+     entera sola.
+   - **¿Falta alguien más?** El listado que tenemos se sacó de una captura del sidebar (17
+     profesionales, termina en Dr. Roner Capellan). Que lo confirmen completo.
 6. **E2E completo por WhatsApp** (agendar + reagendar para un tercero), que fue lo que destapó todo
    esto y sigue sin terminarse.
 7. Lo de antes: limpiar env vars basura de `odontotec` (`SMTP_*` duplicado — **la buena es la de
