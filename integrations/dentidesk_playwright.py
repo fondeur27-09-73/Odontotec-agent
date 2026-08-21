@@ -361,9 +361,29 @@ def _cerrar_autocompletar(page, tecleado: str) -> None:
     #   - NUNCA Escape: el modal de cita es un modal Bootstrap y Escape lo CIERRA ENTERO — pasó en
     #     producción 2026-08-21: el siguiente page.fill("#fono") se quedó 30s esperando un campo
     #     que ya no estaba en pantalla.
-    # Quitarle el foco al input cierra el autocompletar y conserva lo tecleado.
+    # Quitarle el foco al input cierra el autocompletar.
     page.evaluate("() => { const el = document.getElementById('rut'); if (el) el.blur(); }")
     page.wait_for_timeout(200)
+    # Dentidesk igual le mete mano al campo al cerrar (visto en producción: dejó '031' de una cédula
+    # de 11 dígitos). Da igual por cuántos dígitos matchee un registro viejo — 3, 5 o 6 es normal:
+    # lo ÚNICO que no puede pasar es que el campo acabe con algo distinto de los 11 tecleados.
+    # Así que se le IMPONE el valor y se limpia #id_paciente: sin fila exacta, es un paciente NUEVO
+    # y la ficha se crea con la cédula completa.
+    if tecleado and "".join(c for c in (page.input_value("#rut") or "") if c.isdigit()) != tecleado:
+        page.evaluate(
+            """(rut) => {
+                const el = document.getElementById('rut');
+                if (el) {
+                    el.value = rut;
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                }
+                const idp = document.getElementById('id_paciente');
+                if (idp) idp.value = '0';   // paciente nuevo: que NO quede enlazado a otra ficha
+            }""",
+            tecleado,
+        )
+        page.wait_for_timeout(200)
 
 
 def _type_rut_recognize(page, rut: str, cap_ms: int = 3000) -> bool:
@@ -388,9 +408,10 @@ def _type_rut_recognize(page, rut: str, cap_ms: int = 3000) -> bool:
     quedo = "".join(c for c in (page.input_value("#rut") or "") if c.isdigit())
     if tecleado and quedo != tecleado:
         raise CedulaAutocompletarHijack(
-            f"El autocompletar de Dentidesk cambió la cédula {tecleado} por {quedo or '(vacío)'}: "
-            "hay un paciente viejo con cédula corta que matchea por prefijo. Agendar ahora crearía "
-            "la cita en la ficha equivocada. Hay que borrar los registros de cédula incompleta."
+            f"El campo de cédula quedó en {quedo or '(vacío)'} en vez de los 11 dígitos tecleados "
+            f"({tecleado}), y no se pudo restaurar. Agendar así crearía la cita en la ficha "
+            "equivocada. NO es problema de que un registro viejo coincida por prefijo (coincidir "
+            "por 3 o 5 dígitos es normal): el requisito es que el campo termine con los 11."
         )
     try:
         page.wait_for_function(
