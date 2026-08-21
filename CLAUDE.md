@@ -1,6 +1,91 @@
 # CLAUDE.md — Carla Odontotec WhatsApp Agent
 
-## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-20: 2 bugs de agendado arreglados + limpieza del prompt
+## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-21 CERRADA: todo desplegado y verificado
+
+**En una línea:** los dos bugs del 19-ago (cita a nombre de quien escribe · ortodoncia con una
+cirujana) están **arreglados, desplegados y verificados en el contenedor**; se cerró además el mismo
+hueco al REAGENDAR y un bug de teléfonos compartidos en familia. **Falta solo el e2e por WhatsApp.**
+
+| Cosa | Estado |
+|---|---|
+| `odontotec` corriendo `a2b14a0` (4 archivos verificados byte a byte) | ✅ |
+| `dentidesk-daemon` al día + auto-curado tras el reinicio (`logueado: true` solo) | ✅ |
+| Guard del `#rut` del 19-ago | ✅ **desplegado, pendiente cerrado** |
+| Alertas del watchdog a los 2 correos, verificadas en el contenedor | ✅ |
+| Crédito del LLM | ✅ +8 USD — **está en OPENROUTER**, no en platform.openai.com |
+| **E2E por WhatsApp (agendar + reagendar para un tercero)** | ❌ **LO ÚNICO QUE FALTA** |
+
+### ▶️ LO PRIMERO AL RETOMAR: el E2E
+
+Un solo hilo al **849**, y prueba todo de golpe:
+1. **Agendar para un familiar** → Carla debe preguntar *"¿la cita es para usted o para otra
+   persona?"* y pedir nombre + cédula (11 díg) **del familiar**. La cita cae en la ficha DEL
+   FAMILIAR.
+2. **Reagendar esa misma cita** → debe preguntar *"¿a nombre de quién está la cita?"*, buscarla por
+   ese nombre y **confirmar de quién es antes de moverla**.
+3. Si la primera es de **ortodoncia**, debe caer en `Dr. Ortodoncia Ortodoncia`; si es limpieza o
+   caries, en `Dr. General General`.
+
+### 🔒 Los 4 candados que quedaron puestos (todos verificados con tests)
+
+1. **Agendar para un tercero** — `cita_para_tercero` obligatorio + `_datos_del_paciente_real()`:
+   si declara "es de un tercero" pero manda el nombre/cédula del titular del teléfono, corta con
+   `datos_del_titular` **antes** de tocar Dentidesk. Corre ANTES de mirar la especialidad → **aplica
+   a TODOS los servicios**, no solo ortodoncia.
+2. **Buscar la cita de un tercero** — `_datos_de_busqueda_del_tercero()` descarta el teléfono y la
+   cédula que se puedan PROBAR del titular (están en la BD local con otro nombre). Buscar con el
+   teléfono de quien escribe devolvía **SU** cita → Carla movía la cita equivocada, sin error.
+   Si el teléfono resulta ser de verdad el del familiar, **se conserva**.
+3. **El teléfono ya no decide el match** (`_cita_matches` en `integrations/dentidesk.py`) — una
+   familia entera deja el mismo número. El teléfono se probaba ANTES que el nombre → buscando al
+   primo salía la cita de la mamá. Ahora, **con nombre (>=2 tokens) el teléfono no cuenta**; manda
+   nombre+apellido o cédula de 11 dígitos, como en Dentidesk. Sin nombre, el teléfono sigue valiendo.
+4. **Elegir doctor** — `_DOCTORES_DENTIDESK` + `_doctor_de_la_lista()`: un nombre fuera del listado
+   real se rechaza con `doctor_desconocido` sin escribir nada.
+
+### 🔁 Si el paciente dice "esa no es" al reagendar (escalera, una cosa por mensaje)
+
+1. Otra vez por el nombre del familiar — pedir que lo **deletree como está en la cédula**.
+2. Por la **cédula del familiar** (11 dígitos).
+3. Por el nombre de **QUIEN ESCRIBE** — hay citas viejas de familiares que quedaron guardadas a
+   nombre de quien las pidió (por el bug de antes del 2026-08-20). Confirmarla igual antes de mover.
+
+⚠️ **Eso es parche de LECTURA, no de datos.** Las citas mal creadas siguen con el nombre equivocado
+en Dentidesk. Corregirlas es a mano, en el CRM.
+
+### ⏳ PENDIENTE DEL CLIENTE — 3 doctores sin especialidad
+
+Están en el listado de Profesionales de Dentidesk, pero **no sabemos qué atienden**, así que el
+prompt le PROHÍBE a Carla elegirlos:
+
+- **Dra. Mirleinis Casado**
+- **Dra. Monica Vargas**
+- **Dr. Roner Capellan**
+
+Y **Dra. Ekaterina Fernandez** se eliminó: estaba en la lista vieja del cliente como
+odontopediatría, **no existe en Dentidesk**.
+
+📌 **Regla acordada:** el listado de profesionales es **el de Dentidesk**, no el del cliente. Cada
+vez que la clínica cambie un doctor allí, **tiene que avisarnos** para actualizar `agent/prompts.py`.
+
+### 🧪 Cómo verificar un deploy (el `/health` sigue diciendo `commit: desconocido`)
+
+Tamaños **LF** de cada archivo, sacados de git — NO usar `wc -c` del working copy en Windows, que
+cuenta CRLF (1 byte de más por línea) y te hace perseguir un fantasma:
+
+```bash
+git cat-file -s HEAD:agent/prompts.py     # el número que debe dar el contenedor
+```
+```sh
+# en el contenedor -> Terminal
+wc -c /app/agent/prompts.py /app/agent/tool_handlers.py /app/agent/claude.py /app/integrations/dentidesk.py
+```
+`a2b14a0` = **31365 · 23362 · 19792 · 12735**. Prueba binaria extra: `ls /app/agent/tools.py` debe
+decir **No such file** (ese archivo se borró el 2026-08-20).
+
+---
+
+## 🟢 (previo) Sesión 2026-08-20: 2 bugs de agendado arreglados + limpieza del prompt
 
 **En una línea:** Carla agendaba **a nombre de quien escribe** cuando la cita era de un familiar, y
 mandaba **ortodoncia a una cirujana**. Las dos cosas arregladas en código + prompt. ⏳ **falta Deploy
