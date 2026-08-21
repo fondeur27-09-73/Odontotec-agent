@@ -11,11 +11,43 @@ de `odontotec`.**
 | Guardrail de cita para un TERCERO (`cita_para_tercero`) | ✅ código + prompt + tests |
 | Carla ELIGE el doctor del listado real de Dentidesk (`doctor`) | ✅ código + prompt + tests |
 | Fichas genéricas `Dr. Ortodoncia Ortodoncia` / `Dr. General General` | ✅ |
-| Alertas del watchdog a 2 correos | ✅ código — ⏳ **falta poner la env var** |
+| Alertas del watchdog a 2 correos | ✅ **env var puesta y verificada en el contenedor** |
 | `agent/tools.py` (esquema muerto) borrado | ✅ |
-| Deploy de `odontotec` | ❌ **PENDIENTE** |
+| Deploy de `odontotec` | ✅ **VERIFICADO 2026-08-21** |
 
 Suite: **140 pasan** (los 6+2 de respx/py3.14 siguen preexistentes).
+
+### ✅ VERIFICACIÓN DEL DEPLOY (2026-08-21) — cómo se comprobó sin el hash
+
+`/health` sigue diciendo `commit: desconocido` (EasyPanel manda el build sin `.git`). Se verificó por
+**tamaño de archivo** en la Terminal del contenedor, y con una prueba binaria: este commit **borró**
+`agent/tools.py`, así que si el archivo NO existe, el deploy tomó.
+
+```sh
+# en odontotec -> Terminal
+ls -la /app/agent/tools.py; wc -c /app/agent/prompts.py /app/agent/tool_handlers.py /app/agent/claude.py /app/integrations/alerts.py
+```
+Resultado 2026-08-21: `tools.py` **no existe** ✅ y los bytes cuadran exactos —
+`prompts.py` 30262 · `tool_handlers.py` 21787 · `claude.py` 19084 · `alerts.py` 4047.
+
+⚠️ **OJO al comparar bytes:** el repo local (Windows) guarda CRLF y el contenedor LF → el archivo
+del contenedor pesa **1 byte menos por línea**. El tamaño bueno para comparar es el de git:
+`git cat-file -s HEAD:<ruta>`, no `wc -c` del working copy.
+
+`echo $WATCHDOG_ALERT_EMAIL` en el contenedor → los dos correos ✅.
+
+### ⚠️ `dentidesk-daemon` va un commit atrás (no urgente)
+
+`wc -c /app/integrations/dentidesk_playwright.py` → **39142** = commit `0c61ce9`. O sea:
+- ✅ **el guard del autocompletar de `#rut` SÍ está desplegado** — ese pendiente del 19-ago queda
+  CERRADO.
+- ⚠️ le falta el cambio de ayer (HEAD = **39415**): que `_select_doctor_verified` prefiera la
+  coincidencia EXACTA sobre la parcial al elegir en el desplegable de doctores.
+
+**No corre prisa:** la selección de doctor corre en el daemon, pero funciona igual — el needle
+`ortodoncia ortodoncia` encuentra `Dr. Ortodoncia Ortodoncia` por coincidencia parcial. Lo que falta
+es solo la red de seguridad para cuando haya nombres parecidos. Deploy del daemon cuando convenga;
+recordar que reinicia Chrome y, si la cookie caducó, toca loguear por VNC (reCAPTCHA, <2 min).
 
 ### 🐛 BUG 1 — la cita de un familiar se agendaba a nombre de quien escribía
 
