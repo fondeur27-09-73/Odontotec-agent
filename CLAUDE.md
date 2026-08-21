@@ -1,6 +1,74 @@
 # CLAUDE.md — Carla Odontotec WhatsApp Agent
 
-## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-21 CERRADA: todo desplegado y verificado
+## 🔴 ARRANCAR AQUÍ — Sesión 2026-08-21 (tarde): INCIDENTE EN PRODUCCIÓN, RESUELTO
+
+**En una línea:** durante el e2e se descubrió que **NINGUNA cita se podía crear** — el daemon
+devolvía `502` y Carla repetía el GUION F. Había **pacientes reales esperando**. Arreglado en 3
+iteraciones; la última creó la cita de verdad (`IdAgenda 2357240`).
+
+### La cadena del fallo (cada capa tapaba a la siguiente)
+
+1. `_type_rut_recognize` cerraba el autocompletar de `#rut` con **Enter**. El Enter no solo cierra:
+   **SELECCIONA la fila resaltada**. Un registro viejo de cédula corta (`031`, `0310`) matchea por
+   PREFIJO — y en Santo Domingo ese prefijo es comunísimo → Dentidesk sobrescribía la cédula y
+   enlazaba **la ficha de otra persona**.
+2. El guard del 19-ago lo detectaba y abortaba (**correcto**: mejor no agendar que agendar mal),
+   pero eso dejó **sin poder agendar a todo paciente con ese prefijo**. Guard bueno, sistema roto.
+3. Se dependía de que el cliente borrara los registros de cédula corta. **Nunca lo hizo.** Ya NO
+   hace falta.
+
+### El arreglo (3 commits, cada uno destapó el siguiente error)
+
+| Commit | Qué |
+|---|---|
+| `b08f5cb` | No más Enter. Si hay una fila con la cédula EXACTA → se clica (enlaza al paciente correcto). Si no → cerrar sin seleccionar. |
+| `9590089` | **Escape NO**: el modal de cita es Bootstrap y Escape lo cierra ENTERO → el `fill("#fono")` siguiente esperaba 30s por un campo que ya no estaba. Se cierra con **blur**. |
+| `5d7727c` | Dentidesk igual dejaba `031` en el campo. Ahora se le **IMPONE** la cédula (value + eventos `input`/`change`) y se pone `#id_paciente=0` → ficha nueva con la cédula completa. |
+
+📌 **Regla del usuario (2026-08-21):** que un registro viejo coincida por 3, 5 o 6 dígitos **da
+igual, es normal**. Lo ÚNICO que no puede pasar es que el campo acabe con algo distinto de **los 11
+dígitos tecleados**. El guard sigue como red de seguridad y solo aborta si ni así se puede restaurar.
+
+**Resultado verificado en vivo:** `{"success":true,"IdAgenda":"2357240","IdPaciente":"455642",
+"paciente_existe":false}` — ficha NUEVA, no colgada de la de nadie.
+
+### 🔧 Cómo se diagnosticó (repetir esto la próxima vez, ahorra horas)
+
+Los logs de `odontotec` solo dicen `502`, y los del daemon estaban **inundados** por el heartbeat.
+Lo que funcionó fue **pedirle el error al daemon directamente**, porque el `502` lleva el motivo en
+el cuerpo (`detail=str(e)`) y nadie lo loguea:
+
+```sh
+# en dentidesk-daemon -> Terminal
+curl -s -X POST localhost:8100/crear_cita -H 'Content-Type: application/json'   -H "X-Daemon-Secret: $DENTIDESK_DAEMON_SECRET"   -d '{"cedula":"03102795602","patient_name":"Anthony Ramirez","phone":"+18099790205","doctor_label":"General General","fecha_iso":"2026-08-25","time":"15:00","procedimiento":"Limpieza dental","sucursal":"214"}'
+```
+⚠️ Escribe en Dentidesk de verdad si sale bien.
+
+### ⏳ PENDIENTE PARA LA PRÓXIMA SESIÓN (por orden)
+
+1. **Verificar en Dentidesk la cita `IdAgenda 2357240`**: 25-ago 3:00 PM · Anthony Ramirez ·
+   `Dr. General General` · cédula completa `03102795602` (NO `031`/`0310`). Quedó sin comprobar.
+2. **🕐 La Sra. Bastardo (conv 18, `+18294753460`) se quedó SIN CITA.** Cayó en el bucle del GUION F
+   mientras el daemon estaba roto. Retomarla desde Chatwoot o dejar que Carla lo reintente.
+3. **🔇 El heartbeat se traga la muerte de Chrome** — `>>> heartbeat fallo, ignoro y sigo (Page.goto:
+   Target page, context or browser has been closed)`, cientos de líneas, tapando el traceback real.
+   Debe propagar la muerte (como `_wait_until_dead`) o al menos no inundar el log.
+4. **🚨 El watchdog NO avisó en NINGÚN momento.** Las citas llevaban horas fallando con `502` y él
+   daba el sistema por sano porque solo mira `/session` (que devolvía 200). **Un `502` repetido en
+   `crear_cita` es el síntoma más caro que existe: pacientes que no consiguen cita.** Hay que
+   vigilarlo.
+5. **📋 PREGUNTARLE AL CLIENTE la especialidad de 3 doctores** que están en Dentidesk pero Carla NO
+   puede elegir hasta saberlo: **Dra. Mirleinis Casado**, **Dra. Monica Vargas**, **Dr. Roner
+   Capellan**. Recordarle también la regla: cada vez que cambien un doctor en Profesionales,
+   **tienen que avisarnos**.
+6. **E2E completo por WhatsApp** (agendar + reagendar para un tercero), que fue lo que destapó todo
+   esto y sigue sin terminarse.
+7. Lo de antes: limpiar env vars basura de `odontotec` (`SMTP_*` duplicado — **la buena es la de
+   abajo**, líneas 28-31) y los recordatorios masivos (Fase 3, bloqueada por plantilla de Meta).
+
+---
+
+## 🟢 (previo)  Sesión 2026-08-21 CERRADA: todo desplegado y verificado
 
 **En una línea:** los dos bugs del 19-ago (cita a nombre de quien escribe · ortodoncia con una
 cirujana) están **arreglados, desplegados y verificados en el contenedor**; se cerró además el mismo
