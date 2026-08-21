@@ -44,19 +44,37 @@ curl -s -X POST localhost:8100/crear_cita -H 'Content-Type: application/json'   
 ```
 ⚠️ Escribe en Dentidesk de verdad si sale bien.
 
+### 👁️ Los 3 agujeros que hicieron esto invisible — ARREGLADOS Y DESPLEGADOS (`3cd3c27`)
+
+El incidente no duró horas por ser difícil, sino porque **nada avisó**. Los tres fallaban en silencio:
+
+1. **El heartbeat se tragaba la muerte de Chrome** (`ignoro y sigo`): cientos de líneas idénticas
+   tapando el traceback real, y si moría el navegador entero el daemon seguía vivo sobre un cadáver.
+   Ahora **reabre la pestaña como sonda de vida REAL**: si tampoco puede, sale → el contenedor
+   reinicia y se auto-cura. Log limitado a la 1ª vez y luego 1/hora.
+2. **El watchdog no vigilaba las escrituras.** Solo miraba `/session`, que devolvía 200 mientras
+   `crear_cita` llevaba horas en `502`. Nueva métrica **`cita_write_failed`** (`_escribir_o_contar`
+   en `agent/tool_handlers.py`) y **alerta al PRIMER fallo**: una cita que no entra ya es un
+   paciente sin cita.
+3. **Carla atascada pasaba por sana.** `_patient_waiting_secs` daba la conversación por buena en
+   cuanto el último mensaje era de Carla — pero repetía el GUION F ("permítame un momento") sin
+   parar y el paciente nunca conseguía cita. **`_carla_en_bucle`** detecta 2+ respuestas idénticas
+   seguidas y alerta: "Carla está ATASCADA en la conversación X".
+
+Con esto, el escenario del 21-ago habría mandado 3 correos en los primeros 5 minutos.
+
+**Verificado en los contenedores (2026-08-21):** daemon `dentidesk_daemon.py` 15136 +
+`/session {"logueado":true}` (se auto-curó tras el reinicio, sin VNC); odontotec `tool_handlers.py`
+24178 · `watchdog.py` 11107 · `metrics.py` 1300. Suite: **148 pasan**.
+
 ### ⏳ PENDIENTE PARA LA PRÓXIMA SESIÓN (por orden)
 
 1. **Verificar en Dentidesk la cita `IdAgenda 2357240`**: 25-ago 3:00 PM · Anthony Ramirez ·
    `Dr. General General` · cédula completa `03102795602` (NO `031`/`0310`). Quedó sin comprobar.
 2. **🕐 La Sra. Bastardo (conv 18, `+18294753460`) se quedó SIN CITA.** Cayó en el bucle del GUION F
    mientras el daemon estaba roto. Retomarla desde Chatwoot o dejar que Carla lo reintente.
-3. **🔇 El heartbeat se traga la muerte de Chrome** — `>>> heartbeat fallo, ignoro y sigo (Page.goto:
-   Target page, context or browser has been closed)`, cientos de líneas, tapando el traceback real.
-   Debe propagar la muerte (como `_wait_until_dead`) o al menos no inundar el log.
-4. **🚨 El watchdog NO avisó en NINGÚN momento.** Las citas llevaban horas fallando con `502` y él
-   daba el sistema por sano porque solo mira `/session` (que devolvía 200). **Un `502` repetido en
-   `crear_cita` es el síntoma más caro que existe: pacientes que no consiguen cita.** Hay que
-   vigilarlo.
+3. ✅ **HECHO Y DESPLEGADO** — los 3 agujeros de observabilidad (commit `3cd3c27`). Ver el bloque
+   👁️ de abajo.
 5. **📋 PREGUNTARLE AL CLIENTE — 4 preguntas sobre los doctores.** Mientras no conteste, Carla
    trabaja con un listado incompleto:
    - **¿Qué especialidad atiende cada uno?** Están en Dentidesk pero Carla NO puede elegirlos hasta
