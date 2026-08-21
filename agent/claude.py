@@ -126,6 +126,7 @@ OPENAI_TOOLS = [
                     "cedula": {"type": "string", "description": "Cédula del paciente (opcional)"},
                     "telefono": {"type": "string", "description": "Teléfono del paciente (opcional)"},
                     "nombre": {"type": "string", "description": "Nombre y apellido del paciente (opcional). Imprescindible para citas de terceros/familiares. Requiere al menos nombre + apellido."},
+                    "cita_para_tercero": {"type": "boolean", "description": "true si la cita es de OTRA persona (un familiar), no de quien escribe por WhatsApp. Con true se descartan de la búsqueda el teléfono y la cédula de quien escribe, que encontrarían SU cita en vez de la del familiar: en ese caso mande el `nombre` del paciente de la cita."},
                     "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina (default arroyo_hondo)"}
                 },
                 "required": ["fecha_iso"]
@@ -143,6 +144,7 @@ OPENAI_TOOLS = [
                     "cedula": {"type": "string", "description": "Cédula del paciente (opcional)"},
                     "telefono": {"type": "string", "description": "Teléfono del paciente (opcional)"},
                     "nombre": {"type": "string", "description": "Nombre y apellido del paciente (opcional). Fallback para citas de terceros/familiares. Requiere al menos nombre + apellido."},
+                    "cita_para_tercero": {"type": "boolean", "description": "true si la cita es de OTRA persona (un familiar), no de quien escribe por WhatsApp. Con true se descartan de la búsqueda el teléfono y la cédula de quien escribe, que encontrarían SU cita en vez de la del familiar: en ese caso mande el `nombre` del paciente de la cita."},
                     "dias": {"type": "integer", "description": "Cuántos días hacia adelante escanear desde hoy (default 10)"},
                     "sucursal": {"type": "string", "description": "arroyo_hondo|naco|haina (default arroyo_hondo)"}
                 },

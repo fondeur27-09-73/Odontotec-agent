@@ -611,3 +611,39 @@ def test_fichas_genericas_estan_en_el_listado_real():
     from agent.tool_handlers import _DOCTOR_DEFAULTS, _doctor_de_la_lista
     for esp, needle in _DOCTOR_DEFAULTS.items():
         assert _doctor_de_la_lista(needle) is not None, f"{esp} -> '{needle}' no está en Dentidesk"
+
+
+# ── Reagendar cita de un tercero: no buscar por los datos de quien escribe ─────────────────────
+
+def test_buscar_tercero_descarta_el_telefono_de_quien_escribe():
+    """Bug hermano del de agendar: buscar por el teléfono del remitente devuelve SU cita, y Carla
+    terminaría moviendo la cita equivocada."""
+    titular = {"name": "Karen Ferreras", "cedula": "03102778092"}
+    with patch("agent.tool_handlers.db.get_patient", return_value=titular), \
+         patch("agent.tool_handlers.dentidesk.find_upcoming", return_value=None) as mock_find:
+        handle_tool("buscar_cita_proxima_dentidesk", {
+            "telefono": "+18091234567", "cedula": "03102778092",
+            "nombre": "José Gabriel Ramírez", "cita_para_tercero": True})
+    kwargs = mock_find.call_args.kwargs
+    assert kwargs["phone"] == ""                      # el teléfono del remitente, descartado
+    assert kwargs["cedula"] == ""                     # su cédula, también
+    assert kwargs["nombre"] == "José Gabriel Ramírez"  # se busca por el nombre del paciente
+
+
+def test_buscar_tercero_conserva_el_telefono_si_es_del_paciente():
+    """Si el teléfono resulta ser de verdad el del familiar, NO se descarta: sirve para encontrarla."""
+    titular = {"name": "José Gabriel Ramírez", "cedula": "00112345678"}
+    with patch("agent.tool_handlers.db.get_patient", return_value=titular), \
+         patch("agent.tool_handlers.dentidesk.find_upcoming", return_value=None) as mock_find:
+        handle_tool("buscar_cita_proxima_dentidesk", {
+            "telefono": "+18099999999", "nombre": "José Gabriel Ramírez",
+            "cita_para_tercero": True})
+    assert mock_find.call_args.kwargs["phone"] == "+18099999999"
+
+
+def test_buscar_cita_propia_no_descarta_nada():
+    with patch("agent.tool_handlers.dentidesk.find_in_day", return_value=None) as mock_find:
+        handle_tool("buscar_cita_dentidesk", {
+            "fecha_iso": _LUNES, "telefono": "+18091234567", "cedula": "03102778092"})
+    assert mock_find.call_args.kwargs["phone"] == "+18091234567"
+    assert mock_find.call_args.kwargs["cedula"] == "03102778092"

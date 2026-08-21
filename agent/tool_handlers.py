@@ -373,6 +373,26 @@ def _resolve_doctor(specialty: str) -> str | None:
     return doctor_map.get(str(specialty).strip().lower())
 
 
+def _datos_de_busqueda_del_tercero(telefono: str, cedula: str, nombre: str) -> tuple[str, str]:
+    """Al buscar la cita de un TERCERO, descarta el teléfono/cédula que sean de QUIEN ESCRIBE.
+
+    Bug hermano del de agendar (2026-08-19): si quien escribe pide mover la cita de su primo y la
+    búsqueda va con SU teléfono, Dentidesk devuelve LA CITA DE ÉL — y Carla termina moviendo la cita
+    equivocada, sin ningún error visible. El dato que sirve es el `nombre` del paciente de la cita.
+    Solo se descarta lo que se puede PROBAR que es del titular del teléfono (está en la base local
+    con otro nombre): si el teléfono resulta ser de verdad el del tercero, se conserva."""
+    if not nombre:
+        return telefono, cedula   # sin nombre no hay con qué comparar; se deja como venga
+    titular = db.get_patient(telefono) if telefono else None
+    if not titular:
+        return telefono, cedula
+    if _norm_nombre(titular.get("name")) == _norm_nombre(nombre):
+        return telefono, cedula   # el teléfono ES del paciente de la cita
+    ced_titular = "".join(c for c in str(titular.get("cedula", "")) if c.isdigit())
+    ced_dada = "".join(c for c in str(cedula) if c.isdigit())
+    return "", ("" if ced_titular and ced_titular == ced_dada else cedula)
+
+
 def _cita_to_dict(cita: dict) -> dict:
     """Normaliza una cita cruda de la API de Dentidesk al shape que ve el modelo."""
     return {
@@ -395,11 +415,14 @@ def _buscar_cita_dentidesk(
     telefono: str = "",
     nombre: str = "",
     sucursal: str = "arroyo_hondo",
+    cita_para_tercero: bool = False,
 ) -> dict:
     """LECTURA: busca la cita del paciente en la agenda real de Dentidesk para un día.
     Empareja por cédula, teléfono o NOMBRE (fallback para citas de terceros, donde el tel/cédula
     del remitente no coincide). Devuelve la cita o no encontrada."""
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
+    if cita_para_tercero:
+        telefono, cedula = _datos_de_busqueda_del_tercero(telefono, cedula, nombre)
     cita = dentidesk.find_in_day(fecha_iso, cedula=cedula, phone=telefono,
                                  nombre=nombre, location=loc)
     if not cita:
@@ -413,6 +436,7 @@ def _buscar_cita_proxima_dentidesk(
     nombre: str = "",
     dias: int = 10,
     sucursal: str = "arroyo_hondo",
+    cita_para_tercero: bool = False,
 ) -> dict:
     """LECTURA: busca la PRÓXIMA cita del paciente SIN conocer la fecha exacta, escaneando la agenda
     real desde hoy hacia adelante. Prueba en orden: teléfono, cédula, y por último NOMBRE (nombre y
@@ -422,6 +446,8 @@ def _buscar_cita_proxima_dentidesk(
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
     # Un solo escaneo con los 3 datos: _cita_matches hace OR (tel | cédula | nombre). Escanear una
     # vez por dato costaba 3x logins y 3x tiempo para el mismo resultado.
+    if cita_para_tercero:
+        telefono, cedula = _datos_de_busqueda_del_tercero(telefono, cedula, nombre)
     cita = dentidesk.find_upcoming(cedula=cedula, phone=telefono, nombre=nombre,
                                    days=dias, location=loc)
     if not cita:
