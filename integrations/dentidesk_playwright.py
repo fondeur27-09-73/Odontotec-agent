@@ -356,16 +356,14 @@ def _cerrar_autocompletar(page, tecleado: str) -> None:
             return
     except Exception:
         pass  # si el click falla, seguimos por el camino de Escape (nunca por el de Enter)
-    # Ninguna fila coincide exacta: cerrar sin seleccionar. NUNCA Enter — aceptaría la resaltada.
-    page.keyboard.press("Escape")
+    # Ninguna fila coincide exacta: cerrar el dropdown SIN seleccionar y SIN teclas.
+    #   - NUNCA Enter: aceptaría la fila resaltada (el bug que estamos arreglando).
+    #   - NUNCA Escape: el modal de cita es un modal Bootstrap y Escape lo CIERRA ENTERO — pasó en
+    #     producción 2026-08-21: el siguiente page.fill("#fono") se quedó 30s esperando un campo
+    #     que ya no estaba en pantalla.
+    # Quitarle el foco al input cierra el autocompletar y conserva lo tecleado.
+    page.evaluate("() => { const el = document.getElementById('rut'); if (el) el.blur(); }")
     page.wait_for_timeout(200)
-    # Escape puede dejar el campo vacío en algunos widgets: reponer tecleando (no con fill, que no
-    # dispara los eventos que Dentidesk necesita para no marcar el campo en rojo).
-    if tecleado and "".join(c for c in (page.input_value("#rut") or "") if c.isdigit()) != tecleado:
-        page.fill("#rut", "")
-        page.locator("#rut").press_sequentially(tecleado, delay=30)
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(200)
 
 
 def _type_rut_recognize(page, rut: str, cap_ms: int = 3000) -> bool:
