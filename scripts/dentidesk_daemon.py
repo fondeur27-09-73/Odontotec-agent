@@ -108,6 +108,7 @@ def _keep_session_warm(ctx, page, poll=5, every=None):
               flush=True)
         return _wait_until_dead(page, poll)
     last = time.monotonic()
+    fallos = 0
     while not page.is_closed():
         time.sleep(poll)
         if time.monotonic() - last < every:
@@ -116,10 +117,32 @@ def _keep_session_warm(ctx, page, poll=5, every=None):
         try:
             hb.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=20000)
             _save_cookies(ctx)
+            fallos = 0
             print(">>> heartbeat: navegue Dentidesk + re-guarde cookie (sesion caliente).",
                   flush=True)
+            continue
         except Exception as ex:
-            print(f">>> heartbeat fallo, ignoro y sigo ({ex}).", flush=True)
+            fallos += 1
+            # INCIDENTE 2026-08-21: esto era `ignoro y sigo` a secas. La pestana del heartbeat murio
+            # y el daemon escupio CIENTOS de lineas identicas durante horas, tapando el traceback
+            # que hacia falta para diagnosticar un fallo REAL de creacion de citas. Peor: si lo que
+            # murio es el navegador entero, ignorarlo deja al daemon vivo sobre un cadaver, que es
+            # exactamente el fallo silencioso que _wait_until_dead existe para evitar.
+            if fallos == 1 or fallos % 12 == 0:   # 1a vez y luego 1 vez/hora, no cada 5 min
+                print(f">>> heartbeat fallo x{fallos} ({ex}).", flush=True)
+        # Reabrir la pestana sirve de sonda de vida REAL: si el navegador esta muerto, esto tambien
+        # falla -> salimos y el que llama hace sys.exit(1) -> el contenedor reinicia y se auto-cura.
+        try:
+            try:
+                hb.close()
+            except Exception:
+                pass
+            hb = ctx.new_page()
+            print(">>> heartbeat: pestana reabierta (el navegador sigue vivo).", flush=True)
+        except Exception as ex2:
+            print(f">>> NAVEGADOR MUERTO: no pude reabrir la pestana del heartbeat ({ex2}). "
+                  ">>> Salgo para que el contenedor reinicie y restaure la sesion.", flush=True)
+            return
 
 
 def _env():

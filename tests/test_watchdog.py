@@ -162,3 +162,29 @@ def test_alerta_sin_destinatarios_no_envia(monkeypatch):
     monkeypatch.setenv("SMTP_USER", "u")
     monkeypatch.setenv("SMTP_PASS", "p")
     assert alerts._send_email("asunto", "cuerpo") is False
+
+
+def test_fallo_al_registrar_cita_queda_contado(monkeypatch):
+    """El síntoma más caro (paciente sin cita) tiene que llegar al watchdog. El 2026-08-21 falló
+    durante horas sin una sola alerta porque nadie lo contaba."""
+    from agent import metrics
+    from agent.tool_handlers import handle_tool
+    from unittest.mock import patch
+    metrics.snapshot_and_reset()
+    with patch("agent.tool_handlers.dentidesk.find_by_cedula", return_value=None), \
+         patch("agent.tool_handlers.dentidesk.find_by_phone", return_value=None), \
+         patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
+               side_effect=RuntimeError("502 del daemon")):
+        handle_tool("agendar_cita_dentidesk", {
+            "patient_name": "Juan Pérez", "patient_phone": "+18091234567",
+            "specialty": "general", "day": "lunes", "time": "10:00 AM",
+            "fecha_iso": "2099-01-05", "cedula": "03102778092", "doctor": "Dr. General General"})
+    assert metrics.snapshot_and_reset()["cita_write_failed"] == 1
+
+
+def test_watchdog_alerta_al_primer_fallo_de_cita(_reset, monkeypatch):
+    from agent import metrics
+    metrics.increment("cita_write_failed")
+    watchdog._check_metrics({})
+    assert len(_reset) == 1
+    assert "CITAS NO SE PUDIERON REGISTRAR" in _reset[0]

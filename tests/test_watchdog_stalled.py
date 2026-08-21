@@ -89,3 +89,33 @@ def test_se_rearma_cuando_deja_de_estar_estancada():
     e2, _ = _run(convs, msgs_ok)          # resuelta -> sale del set, silencio
     e3, _ = _run(convs, msgs_estancada)   # se vuelve a estancar -> alerta de nuevo
     assert len(e1) == 1 and len(e2) == 0 and len(e3) == 1
+
+
+def test_carla_repitiendose_dispara_alerta_aunque_ella_sea_la_ultima_en_hablar():
+    """Incidente 2026-08-21: con el daemon devolviendo 502, Carla repetía 'permítame un momento'
+    sin parar. El último mensaje era suyo -> el watchdog daba la conversación por sana y el
+    paciente nunca conseguía cita. Ese silencio duró horas."""
+    _reset()
+    ahora = int(time.time())
+    guion_f = "Sr. Ramírez, permítame un momento, estoy registrando su cita."
+    msgs = [
+        {"message_type": 0, "content": "sí, confirmo", "created_at": ahora - 400},
+        {"message_type": 1, "content": guion_f, "created_at": ahora - 300},
+        {"message_type": 1, "content": guion_f, "created_at": ahora - 200},
+        {"message_type": 1, "content": guion_f, "created_at": ahora - 100},
+    ]
+    enviados, _ = _run([{"id": 7}], {7: msgs})
+    assert len(enviados) == 1
+    assert "ATASCADA" in enviados[0]
+
+
+def test_carla_contestando_cosas_distintas_no_es_bucle():
+    _reset()
+    ahora = int(time.time())
+    msgs = [
+        {"message_type": 0, "content": "hola", "created_at": ahora - 300},
+        {"message_type": 1, "content": "¿Con quién tengo el gusto?", "created_at": ahora - 200},
+        {"message_type": 1, "content": "¿Me indica su cédula?", "created_at": ahora - 100},
+    ]
+    enviados, _ = _run([{"id": 8}], {8: msgs})
+    assert enviados == []

@@ -107,6 +107,34 @@ def _patient_waiting_secs(cid: int) -> float | None:
     return _age_secs(last.get("created_at"))
 
 
+# Cuántas respuestas IDÉNTICAS seguidas de Carla se consideran un bucle. 2 ya es anormal: Carla
+# tiene prohibido repetir el mismo mensaje (regla 15/16 del prompt).
+_BUCLE_MIN = 2
+
+
+def _carla_en_bucle(cid: int) -> str | None:
+    """Texto que Carla está repitiendo en la conversación `cid`, o None si no se repite.
+
+    HUECO DESCUBIERTO EN EL INCIDENTE DEL 2026-08-21: _patient_waiting_secs da la conversación por
+    SANA en cuanto el último mensaje es de Carla. Pero mientras el daemon devolvía 502, Carla
+    contestaba "permítame un momento, estoy registrando su cita" una y otra vez (GUION F): la
+    conversación parecía viva, el watchdog no veía a nadie esperando, y el paciente NUNCA conseguía
+    su cita. Nadie se enteró en horas. Carla repitiéndose es señal de que está atascada."""
+    from integrations import chatwoot
+    convo = [m for m in chatwoot.get_conv_messages(cid) if m.get("message_type") in (0, 1)]
+    if not convo or convo[-1].get("message_type") != 1:
+        return None   # la pelota está del lado del paciente: lo cubre _patient_waiting_secs
+    ultimo = (convo[-1].get("content") or "").strip()
+    if not ultimo:
+        return None
+    repes = 0
+    for m in reversed(convo):
+        if m.get("message_type") != 1 or (m.get("content") or "").strip() != ultimo:
+            break
+        repes += 1
+    return ultimo if repes >= _BUCLE_MIN else None
+
+
 def _check_stalled_conversations(report: dict) -> None:
     """Avisa cuando un paciente lleva > umbral esperando respuesta en una conversación ABIERTA —
     sea cual sea la causa (daemon caído, saldo LLM en 0, Chatwoot, VPS, cualquier cosa). Vigila el
@@ -119,17 +147,18 @@ def _check_stalled_conversations(report: dict) -> None:
     except Exception as e:
         report["stalled"] = {"error": f"{type(e).__name__}: {e}"}
         return
-    estancadas: dict[int, float] = {}
+    estancadas: dict[int, float | str] = {}   # float = segundos esperando | str = texto en bucle
     for c in convs:
         cid = c.get("id")
         if cid is None:
             continue
         try:
             espera = _patient_waiting_secs(cid)
+            bucle = _carla_en_bucle(cid) if espera is None else None
         except Exception as e:
             logger.warning(f"watchdog stalled: no pude leer la conv {cid}: {e}")
             continue
-        if espera is None or espera < umbral:
+        if bucle is None and (espera is None or espera < umbral):
             continue
         # Candidato estancado: confirmar que no está ya escalada a un humano (alguien la tiene).
         try:
@@ -137,12 +166,17 @@ def _check_stalled_conversations(report: dict) -> None:
                 continue
         except Exception:
             pass  # si no se puede saber, mejor avisar de más que dejar a un paciente colgado
-        estancadas[cid] = espera
+        estancadas[cid] = bucle if bucle is not None else espera
     for cid, espera in estancadas.items():
         if cid not in _alerted_stalled:
             _alerted_stalled.add(cid)
-            msg = (f"[CARLA-WATCHDOG] 🕐 el paciente de la conversación {cid} lleva "
-                   f"{espera / 60:.0f} min esperando respuesta en WhatsApp — revisar en Chatwoot")
+            if isinstance(espera, str):   # Carla repitiéndose: atascada, no es espera del paciente
+                msg = (f"[CARLA-WATCHDOG] 🔁 Carla está ATASCADA en la conversación {cid}: repite "
+                       f"el mismo mensaje sin avanzar — \"{espera[:120]}\". El paciente no está "
+                       f"consiguiendo lo que pidió. Revisar en Chatwoot.")
+            else:
+                msg = (f"[CARLA-WATCHDOG] 🕐 el paciente de la conversación {cid} lleva "
+                       f"{espera / 60:.0f} min esperando respuesta en WhatsApp — revisar en Chatwoot")
             logger.warning(msg)
             alerts.send_dev_alert(msg)
     for cid in list(_alerted_stalled):
@@ -163,6 +197,9 @@ def _check_metrics(report: dict) -> None:
                                  "conversaciones agotaron las iteraciones del agente"),
         "agent_failed": (int(os.getenv("WATCHDOG_AGENT_FAILED_THRESHOLD", "3")),
                          "mensajes fallaron sin respuesta real al paciente"),
+        # Umbral 1 a propósito: UNA cita que no se pudo registrar ya es un paciente sin cita.
+        "cita_write_failed": (int(os.getenv("WATCHDOG_CITA_WRITE_FAILED_THRESHOLD", "1")),
+                              "CITAS NO SE PUDIERON REGISTRAR en Dentidesk (paciente sin cita)"),
     }
     for key, (umbral, desc) in umbrales.items():
         n = snap.get(key, 0)

@@ -12,6 +12,10 @@ _counters = {
     "escalate_blocked": 0,
     "iterations_exhausted": 0,
     "agent_failed": 0,
+    # Fallo al ESCRIBIR en Dentidesk (crear/mover cita). El sintoma mas caro que existe aqui: el
+    # paciente pide cita y no la consigue. El 2026-08-21 esto fallo durante HORAS sin una sola
+    # alerta, porque el watchdog solo miraba /session (que respondia 200 tan feliz).
+    "cita_write_failed": 0,
 }
 
 

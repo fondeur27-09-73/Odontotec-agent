@@ -138,6 +138,22 @@ def _cedula_dominicana_ok(cedula: str) -> tuple[bool, str]:
                    "¿Me la puede enviar de nuevo, completa?")
 
 
+def _escribir_o_contar(fn, **kwargs):
+    """Ejecuta una ESCRITURA en Dentidesk contando el fallo antes de propagarlo.
+
+    INCIDENTE 2026-08-21: `crear_cita` devolvió 502 durante HORAS (pacientes reales sin poder
+    agendar) y el watchdog nunca avisó, porque solo miraba `/session` — que respondía 200 tan feliz.
+    El fallo de escritura es el síntoma MÁS CARO que hay aquí: el paciente pide cita y no la
+    consigue. Ahora queda contado y el watchdog alerta al primer fallo (ver scheduler/watchdog.py).
+    La excepción sigue subiendo igual: esto solo mira, no cambia el comportamiento."""
+    try:
+        return fn(**kwargs)
+    except Exception:
+        from agent import metrics
+        metrics.increment("cita_write_failed")
+        raise
+
+
 def _norm_nombre(s: str) -> str:
     """Nombre en minúsculas, sin tildes, sin dobles espacios — para comparar, no para mostrar."""
     import unicodedata
@@ -242,7 +258,8 @@ def _agendar_cita_dentidesk(
                     "message": "El paciente ya tiene una cita registrada ese día; no se creó otra."}
     except Exception:
         pass
-    res = dentidesk_playwright.create_appointment(
+    res = _escribir_o_contar(
+        dentidesk_playwright.create_appointment,
         cedula=cedula, patient_name=patient_name, phone=patient_phone,
         doctor_label=doctor, fecha_iso=fecha_iso, time=time24,
         procedimiento=procedimiento, sucursal=loc,
@@ -291,7 +308,8 @@ def _reagendar_cita_dentidesk(
         if isinstance(nuevo_doctor_label, dict):
             return nuevo_doctor_label
     loc = _LOCATION_ALIAS.get(str(sucursal).lower(), "214")
-    res = dentidesk_playwright.move_appointment(
+    res = _escribir_o_contar(
+        dentidesk_playwright.move_appointment,
         id_agenda=id_agenda, fecha_actual_iso=fecha_actual_iso, patient_name=patient_name,
         nueva_fecha_iso=fecha_iso, nueva_hora=time24, sucursal=loc, doctor_label=doctor,
         nuevo_doctor_label=nuevo_doctor_label, nuevo_procedimiento=procedimiento,
