@@ -315,6 +315,59 @@ def _select_sucursal_safe(page, sucursal: str) -> None:
     page.select_option("#sucursal_cita", value=str(sucursal))
 
 
+# Busca en el dropdown del autocompletar la fila cuya cédula coincide EXACTA con la tecleada.
+# Devuelve el elemento más PROFUNDO que la contiene (la fila, no el contenedor entero) para no
+# clicar media pantalla. Solo dígitos: Dentidesk reformatea el RUT con puntos y guion.
+_FILA_EXACTA_JS = r"""(digits) => {
+    const soloDig = t => (t || '').replace(/\D/g, '');
+    const visible = el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && el.offsetParent !== null;
+    };
+    const cand = Array.from(document.querySelectorAll('li, tr, td, div, span, a, p'))
+        .filter(el => el.id !== 'rut' && visible(el) && soloDig(el.textContent).includes(digits));
+    // el más profundo = el que no tiene ningún hijo que también matchee
+    const hoja = cand.find(el => !cand.some(o => o !== el && el.contains(o)));
+    if (!hoja) return false;
+    hoja.setAttribute('data-carla-fila', '1');
+    return true;
+}"""
+
+
+def _cerrar_autocompletar(page, tecleado: str) -> None:
+    """Cierra el autocompletar de #rut SIN dejar que seleccione al paciente equivocado.
+
+    BUG (producción 2026-08-21, bloqueó citas reales): antes esto era un `Enter` a ciegas. El Enter
+    no solo cierra — si el dropdown dejó RESALTADA una fila, la SELECCIONA. Un registro viejo de
+    cédula corta ('0310') matchea por PREFIJO a cualquier cédula de 11 dígitos que empiece igual
+    (y '0310' es comunísimo en Santo Domingo), así que Dentidesk sobrescribía #rut con la cédula
+    corta y enlazaba la ficha de otra persona. El guard lo detectaba y abortaba la cita — correcto,
+    pero dejaba SIN PODER AGENDAR a todo paciente con ese prefijo.
+
+    Ahora: si hay una fila cuya cédula es EXACTAMENTE la tecleada, se clica (enlaza al paciente
+    correcto, que es lo que queremos). Si no la hay, se cierra con Escape SIN seleccionar nada →
+    Dentidesk lo trata como paciente nuevo y crea la ficha con la cédula completa, que es lo
+    correcto: el registro viejo de cédula corta es otra ficha, no ésta."""
+    page.wait_for_timeout(600)   # dar tiempo al ajax del autocompletar
+    try:
+        if tecleado and page.evaluate(_FILA_EXACTA_JS, tecleado):
+            page.click("[data-carla-fila='1']")
+            page.wait_for_timeout(300)
+            return
+    except Exception:
+        pass  # si el click falla, seguimos por el camino de Escape (nunca por el de Enter)
+    # Ninguna fila coincide exacta: cerrar sin seleccionar. NUNCA Enter — aceptaría la resaltada.
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(200)
+    # Escape puede dejar el campo vacío en algunos widgets: reponer tecleando (no con fill, que no
+    # dispara los eventos que Dentidesk necesita para no marcar el campo en rojo).
+    if tecleado and "".join(c for c in (page.input_value("#rut") or "") if c.isdigit()) != tecleado:
+        page.fill("#rut", "")
+        page.locator("#rut").press_sequentially(tecleado, delay=30)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(200)
+
+
 def _type_rut_recognize(page, rut: str, cap_ms: int = 3000) -> bool:
     """Teclea la cédula en #rut como un humano y CIERRA la selección con Enter.
 
@@ -330,14 +383,10 @@ def _type_rut_recognize(page, rut: str, cap_ms: int = 3000) -> bool:
     Dentidesk NO rechaza la cédula dominicana por "RUT chileno" -- acepta cualquier dígito, sin mínimo
     ni check-digit (guardó un paciente con '123'). El único bloqueo real es cédula VACÍA. Por eso el
     guardrail de 11 dígitos vive en el agente (agent/tool_handlers._cedula_dominicana_ok), no aquí."""
+    tecleado = "".join(c for c in rut if c.isdigit())
     page.fill("#rut", "")                                  # limpia por si trae algo
     page.locator("#rut").press_sequentially(rut, delay=30)  # teclea -> dispara autocompletar
-    page.press("#rut", "Enter")                            # cierra la selección (= click en la fila)
-    # El Enter NO siempre solo cierra: si el dropdown dejó resaltada la fila de otro paciente, la
-    # SELECCIONA y sobrescribe #rut. Un registro viejo de cédula corta ('0310') matchea por prefijo
-    # a una de 11 dígitos ('03102778092') y se la lleva. Releer el campo es la única señal — ver
-    # CedulaAutocompletarHijack. Comparamos solo dígitos porque Dentidesk reformatea el RUT.
-    tecleado = "".join(c for c in rut if c.isdigit())
+    _cerrar_autocompletar(page, tecleado)
     quedo = "".join(c for c in (page.input_value("#rut") or "") if c.isdigit())
     if tecleado and quedo != tecleado:
         raise CedulaAutocompletarHijack(
