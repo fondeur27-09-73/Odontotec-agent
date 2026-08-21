@@ -119,3 +119,51 @@ def test_carla_contestando_cosas_distintas_no_es_bucle():
     ]
     enviados, _ = _run([{"id": 8}], {8: msgs})
     assert enviados == []
+
+
+def _run_con_retry(convs, msgs_por_conv, retry_ok=True):
+    """Como _run pero capturando el empujón automático a Carla."""
+    enviados, empujones = [], []
+    def _fake_retry(cid, phone):
+        empujones.append((cid, phone))
+        return retry_ok
+    with patch("integrations.chatwoot.get_open_conversations", return_value=convs), \
+         patch("integrations.chatwoot.get_conv_messages", side_effect=lambda cid: msgs_por_conv.get(cid, [])), \
+         patch("integrations.chatwoot.is_bot_off", return_value=False), \
+         patch("scheduler.watchdog._reintentar_conversacion", side_effect=_fake_retry), \
+         patch("scheduler.watchdog.alerts.send_dev_alert", side_effect=enviados.append):
+        watchdog._check_stalled_conversations({})
+    return enviados, empujones
+
+
+def test_conversacion_atascada_recibe_un_empujon_automatico():
+    """Avisar por correo no basta: si nadie lo mira, el paciente se queda sin cita (conv 18 del
+    incidente 2026-08-21). El watchdog intenta destrabarla solo, UNA vez."""
+    _reset()
+    ahora = int(time.time())
+    guion_f = "Sra. Bastardo, permítame un momento, estoy registrando su cita."
+    msgs = [
+        {"message_type": 0, "content": "sí", "created_at": ahora - 400},
+        {"message_type": 1, "content": guion_f, "created_at": ahora - 200},
+        {"message_type": 1, "content": guion_f, "created_at": ahora - 100},
+    ]
+    conv = {"id": 18, "meta": {"sender": {"phone_number": "+18294753460"}}}
+    enviados, empujones = _run_con_retry([conv], {18: msgs})
+    assert empujones == [(18, "+18294753460")]
+    assert any("ATASCADA" in m for m in enviados)
+    assert any("empujón automático" in m for m in enviados)
+
+
+def test_el_empujon_se_da_una_sola_vez():
+    """Edge-trigger: en el ciclo siguiente, con la conversación igual de atascada, no se repite."""
+    _reset()
+    ahora = int(time.time())
+    msgs = [
+        {"message_type": 0, "content": "sí", "created_at": ahora - 400},
+        {"message_type": 1, "content": "un momento", "created_at": ahora - 200},
+        {"message_type": 1, "content": "un momento", "created_at": ahora - 100},
+    ]
+    conv = {"id": 18, "meta": {"sender": {"phone_number": "+18294753460"}}}
+    _run_con_retry([conv], {18: msgs})
+    _, empujones2 = _run_con_retry([conv], {18: msgs})
+    assert empujones2 == []

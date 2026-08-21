@@ -135,6 +135,43 @@ def _carla_en_bucle(cid: int) -> str | None:
     return ultimo if repes >= _BUCLE_MIN else None
 
 
+# Empujón que se le da a Carla cuando una conversación se queda atascada. NO se le muestra al
+# paciente: _process_message reconstruye el historial desde Chatwoot y este texto solo vive en
+# memoria como el último turno del usuario — el paciente solo ve la RESPUESTA de Carla.
+# Redacción probada a mano por el usuario (2026-08-21): preguntarle "¿ya terminaste?" la destraba,
+# porque la obliga a reintentar la herramienta pendiente y a confirmar el resultado.
+_EMPUJON = "¿Ya quedó registrada mi cita?"
+
+
+def _reintentar_conversacion(cid: int, phone: str) -> bool:
+    """Destraba una conversación atascada haciendo que Carla la retome UNA vez.
+
+    Sin esto, el watchdog solo mandaba un correo y la conversación se quedaba muerta hasta que el
+    paciente escribiera por su cuenta — si no escribía, nadie cerraba la cita (incidente
+    2026-08-21: la paciente de la conv 18 se quedó sin cita mientras Carla repetía el GUION F).
+    Se dispara UNA vez por conversación (el edge-trigger de _alerted_stalled), y agendar es
+    idempotente por cédula+día, así que un reintento no duplica la cita."""
+    if os.getenv("WATCHDOG_AUTO_RETRY", "1") != "1" or not phone:
+        return False
+    import asyncio
+    import main   # ya está en sys.modules (main importa este módulo); import tardío = sin ciclo
+    try:
+        asyncio.run(main._process_message(cid, phone, _EMPUJON))
+        logger.warning(f"[CARLA-WATCHDOG] 🔁 conv {cid} atascada: le di un empujón a Carla")
+        return True
+    except Exception as e:
+        logger.error(f"watchdog: el empujón a la conv {cid} falló: {e}")
+        return False
+
+
+def _phone_de_conv(c: dict) -> str:
+    """Teléfono del paciente en el payload de conversación de Chatwoot."""
+    try:
+        return (c.get("meta", {}).get("sender", {}).get("phone_number") or "").strip()
+    except Exception:
+        return ""
+
+
 def _check_stalled_conversations(report: dict) -> None:
     """Avisa cuando un paciente lleva > umbral esperando respuesta en una conversación ABIERTA —
     sea cual sea la causa (daemon caído, saldo LLM en 0, Chatwoot, VPS, cualquier cosa). Vigila el
@@ -148,6 +185,7 @@ def _check_stalled_conversations(report: dict) -> None:
         report["stalled"] = {"error": f"{type(e).__name__}: {e}"}
         return
     estancadas: dict[int, float | str] = {}   # float = segundos esperando | str = texto en bucle
+    telefonos: dict[int, str] = {}
     for c in convs:
         cid = c.get("id")
         if cid is None:
@@ -167,6 +205,7 @@ def _check_stalled_conversations(report: dict) -> None:
         except Exception:
             pass  # si no se puede saber, mejor avisar de más que dejar a un paciente colgado
         estancadas[cid] = bucle if bucle is not None else espera
+        telefonos[cid] = _phone_de_conv(c)
     for cid, espera in estancadas.items():
         if cid not in _alerted_stalled:
             _alerted_stalled.add(cid)
@@ -179,6 +218,13 @@ def _check_stalled_conversations(report: dict) -> None:
                        f"{espera / 60:.0f} min esperando respuesta en WhatsApp — revisar en Chatwoot")
             logger.warning(msg)
             alerts.send_dev_alert(msg)
+            # Avisar no basta: si nadie mira el correo, el paciente se queda sin cita. Intentar
+            # destrabarla solo, UNA vez.
+            if _reintentar_conversacion(cid, telefonos.get(cid, "")):
+                alerts.send_dev_alert(
+                    f"[CARLA-WATCHDOG] 🔁 a la conversación {cid} se le dio un empujón automático "
+                    f"para que Carla la retome. Verificar en Chatwoot que quedó cerrada."
+                )
     for cid in list(_alerted_stalled):
         if cid not in estancadas:
             _alerted_stalled.discard(cid)  # se resolvió -> re-armar por si vuelve a estancarse
