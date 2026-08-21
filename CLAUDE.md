@@ -36,7 +36,7 @@ del contenedor pesa **1 byte menos por línea**. El tamaño bueno para comparar 
 
 `echo $WATCHDOG_ALERT_EMAIL` en el contenedor → los dos correos ✅.
 
-### ⚠️ `dentidesk-daemon` va un commit atrás (no urgente)
+### ✅ `dentidesk-daemon` desplegado y auto-curado (2026-08-21)
 
 `wc -c /app/integrations/dentidesk_playwright.py` → **39142** = commit `0c61ce9`. O sea:
 - ✅ **el guard del autocompletar de `#rut` SÍ está desplegado** — ese pendiente del 19-ago queda
@@ -44,10 +44,12 @@ del contenedor pesa **1 byte menos por línea**. El tamaño bueno para comparar 
 - ⚠️ le falta el cambio de ayer (HEAD = **39415**): que `_select_doctor_verified` prefiera la
   coincidencia EXACTA sobre la parcial al elegir en el desplegable de doctores.
 
-**No corre prisa:** la selección de doctor corre en el daemon, pero funciona igual — el needle
-`ortodoncia ortodoncia` encuentra `Dr. Ortodoncia Ortodoncia` por coincidencia parcial. Lo que falta
-es solo la red de seguridad para cuando haya nombres parecidos. Deploy del daemon cuando convenga;
-recordar que reinicia Chrome y, si la cookie caducó, toca loguear por VNC (reCAPTCHA, <2 min).
+**RESUELTO el mismo día:** Deploy del daemon hecho → `wc -c` da **39415** ✅ y `/session` devolvió
+`logueado: true` **sin intervención humana** — la cadena de auto-cura (reinicio → cookie de `/data`
+→ Dentidesk) funcionó otra vez. **Los dos contenedores corren el mismo commit.**
+
+⚠️ Recordatorio para futuros deploys del daemon: reinicia Chrome. Si la cookie hubiera caducado
+tocaría loguear por VNC (F5 primero, luego usuario+clave+robot de corrido, <2 min por el reCAPTCHA).
 
 ### 🐛 BUG 1 — la cita de un familiar se agendaba a nombre de quien escribía
 
