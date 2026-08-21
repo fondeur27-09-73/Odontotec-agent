@@ -647,3 +647,20 @@ def test_buscar_cita_propia_no_descarta_nada():
             "fecha_iso": _LUNES, "telefono": "+18091234567", "cedula": "03102778092"})
     assert mock_find.call_args.kwargs["phone"] == "+18091234567"
     assert mock_find.call_args.kwargs["cedula"] == "03102778092"
+
+
+def test_telefono_compartido_no_devuelve_la_cita_del_pariente():
+    """Una familia deja el mismo número. Si sabemos el nombre, el teléfono NO puede decidir el
+    match: devolvería la cita del pariente que aparezca primero en la agenda."""
+    from integrations.dentidesk import _cita_matches, _norm_doc, _norm_phone, _norm_name_tokens
+    cita_de_la_mama = {"PatientName": "Karen Ferreras", "PatientDocument": "03102778092",
+                       "Phone": "8091234567"}
+    tel = _norm_phone("8091234567")
+    # Buscando al primo, con el teléfono compartido: NO debe matchear la cita de la mamá.
+    assert not _cita_matches(cita_de_la_mama, "", tel, _norm_name_tokens("José Gabriel Ramírez"))
+    # Su propia cita sí matchea por nombre.
+    assert _cita_matches(cita_de_la_mama, "", tel, _norm_name_tokens("Karen Ferreras"))
+    # Sin nombre, el teléfono sigue sirviendo (búsqueda del propio paciente).
+    assert _cita_matches(cita_de_la_mama, "", tel, frozenset())
+    # La cédula manda siempre.
+    assert _cita_matches(cita_de_la_mama, _norm_doc("031-0277809-2"), "", frozenset())

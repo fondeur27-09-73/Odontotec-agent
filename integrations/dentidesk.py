@@ -146,7 +146,11 @@ def _cita_matches(cita: dict, target_doc: str, target_phone: str,
                   target_name_tokens: frozenset[str] = frozenset()) -> bool:
     if target_doc and _norm_doc(cita.get("PatientDocument", "")) == target_doc:
         return True
-    if target_phone:
+    # El TELÉFONO no identifica a nadie: una familia entera deja el mismo número ("puede dejar el
+    # mío"). Si sabemos el NOMBRE del paciente, el teléfono NO decide — devolvería la cita del
+    # pariente que aparezca primero. En Dentidesk se ubica por nombre+apellido y por cédula de 11
+    # dígitos; el teléfono solo vale cuando no hay nada mejor.
+    if target_phone and len(target_name_tokens) < 2:
         for field in ("Phone", "Phone2"):
             if _norm_phone(cita.get(field, "")) == target_phone:
                 return True
