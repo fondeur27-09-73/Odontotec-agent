@@ -126,6 +126,44 @@ def _build_history(conv_id: int) -> list[dict]:
             history.append({"role": "assistant", "content": content})
     return history[-MAX_HISTORY:]
 
+# Lo que Carla dice cuando se corta un bucle. NO promete cita ni confirma nada: solo avisa que
+# sigue una persona. La conversación queda en bot-off, así que este es su último mensaje.
+_MENSAJE_HANDOFF = ("Permítame comunicarle con una persona de la clínica para terminar de coordinar "
+                    "su cita. En un momento le atienden por este mismo medio.")
+
+
+def _texto_norm(t) -> str:
+    return " ".join(str(t or "").split()).lower()
+
+
+def _romper_bucle(conv_id: int, history: list[dict], texto: str) -> str:
+    """Carla NUNCA manda dos veces seguidas el mismo mensaje.
+
+    El 2026-08-24 la Sra. Díaz recibió el GUION F ("permítame un momento, estoy registrando su
+    cita") una y otra vez: la tool fallaba siempre igual, el prompt le dice a Carla que INSISTA, y
+    nada acotaba los reintentos ENTRE turnos (MAX_ITERATIONS solo acota UN turno). El paciente
+    esperó hasta que un humano lo vio por casualidad.
+
+    El watchdog ya detecta esto, pero llega tarde y por correo. Acá se corta en el origen: si la
+    respuesta es idéntica a la anterior de Carla, no se manda — se escala a un humano (label
+    bot-off + alerta) y el paciente recibe un mensaje distinto, UNA vez.
+
+    Vale para CUALQUIER bucle, venga del error que venga: compara texto, no causas."""
+    anterior = next((m.get("content") for m in reversed(history)
+                     if m.get("role") == "assistant"), None)
+    if not texto or _texto_norm(anterior) != _texto_norm(texto):
+        return texto
+    logger.critical(f"_romper_bucle conv={conv_id}: Carla repetía {texto!r} — se corta y escala")
+    from agent import metrics
+    from agent.tool_handlers import _escalate_to_human
+    metrics.increment("bucle_cortado")
+    try:
+        _escalate_to_human(f"Carla se repetía: {texto[:120]!r}", conv_id)
+    except Exception as e:   # escalar es best-effort: el paciente igual recibe el handoff
+        logger.critical(f"_romper_bucle conv={conv_id}: no se pudo escalar: {e}")
+    return _MENSAJE_HANDOFF
+
+
 async def _process_message(conv_id: int, phone: str, content: str):
     from integrations.chatwoot import send_message, is_bot_off
     from agent.claude import run_agent
@@ -146,6 +184,7 @@ async def _process_message(conv_id: int, phone: str, content: str):
 
             response_text = await asyncio.to_thread(run_agent, history, conv_id, phone)
             logger.info(f"_process_message response conv={conv_id}: {response_text!r}")
+            response_text = _romper_bucle(conv_id, history, response_text)
             send_message(conv_id, response_text)
             logger.info(f"_process_message sent conv={conv_id}")
     except Exception as e:
