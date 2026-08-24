@@ -252,12 +252,17 @@ def _agendar_cita_dentidesk(
             fecha_iso, cedula=cedula, nombre=patient_name,
             phone="" if cita_para_tercero else patient_phone, location=loc,
         )
-        if existente:
+        # Solo es DUPLICADO si es a la MISMA HORA. Un paciente puede tener dos citas el mismo día
+        # (la agenda real está llena de casos) y la Sra. Díaz (2026-08-24) se quedó sin la suya de
+        # la tarde porque ya tenía una a las 08:30 del año pasado. Lo que este chequeo debe frenar
+        # es el doble-clic del modelo, que repite la MISMA hora.
+        if existente and str(existente.get("time") or "")[:5] == time24[:5]:
             return {"success": True, "ya_existia": True,
                     "IdAgenda": existente.get("IdAgenda"),
                     "paciente": existente.get("PatientName"),
                     "fecha": existente.get("Date"), "hora": existente.get("time"),
-                    "message": "El paciente ya tiene una cita registrada ese día; no se creó otra."}
+                    "message": "El paciente ya tiene esa MISMA cita registrada; no se creó otra. "
+                               "Ya está agendada: confírmesela, no la registre de nuevo."}
     except Exception:
         pass
     res = _escribir_o_contar(

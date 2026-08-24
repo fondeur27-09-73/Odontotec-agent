@@ -681,3 +681,36 @@ def test_agendar_familia_mismo_telefono_no_bloquea_al_segundo(monkeypatch):
             "time": "10:00 AM"}))
     assert result.get("ya_existia") is not True, "la cita del pariente bloqueó la suya"
     mock_pw.assert_called_once()
+
+
+def test_agendar_segunda_cita_del_dia_a_otra_hora_si_entra(monkeypatch):
+    """Caso Sra. Díaz (2026-08-24): tenía cita a las 08:30 (creada un año antes) y pidió otra
+    para la tarde junto con sus hijos. El chequeo 'ya tiene cita ese día' se la bloqueó y Carla
+    igual se la confirmó (ya_existia viaja con success=True). Un paciente SÍ puede tener dos
+    citas el mismo día: solo la MISMA hora es duplicado."""
+    monkeypatch.setattr(
+        "agent.tool_handlers.dentidesk.find_in_day",
+        lambda *a, **k: {"IdAgenda": "2021241", "PatientName": "Nueva Diaz Otano De Urbaez",
+                         "PatientDocument": "00116819525", "Date": _LUNES, "time": "08:30:00"},
+    )
+    with patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
+               return_value={"IdAgenda": "2358900"}) as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk", {
+            **_BASE_ARGS, "patient_name": "Nueva Diaz Otano De Urbaez",
+            "cedula": "00116819525", "time": "2:00 PM"}))
+    assert result.get("ya_existia") is not True, "la cita de la mañana bloqueó la de la tarde"
+    mock_pw.assert_called_once()
+
+
+def test_agendar_misma_hora_sigue_siendo_duplicado(monkeypatch):
+    """El doble-clic del modelo repite la MISMA hora: eso sí se frena."""
+    monkeypatch.setattr(
+        "agent.tool_handlers.dentidesk.find_in_day",
+        lambda *a, **k: {"IdAgenda": "555", "PatientName": "Juan Pérez",
+                         "Date": _LUNES, "time": "10:00:00"},
+    )
+    with patch("agent.tool_handlers.dentidesk_playwright.create_appointment") as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk",
+                                        {**_BASE_ARGS, "time": "10:00 AM"}))
+    assert result["ya_existia"] is True
+    mock_pw.assert_not_called()
