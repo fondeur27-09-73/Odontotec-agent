@@ -156,8 +156,7 @@ def test_resolve_doctor_env_malformado_no_rompe(monkeypatch):
 def _sin_agenda_previa(monkeypatch):
     """Aísla el chequeo de idempotencia: por defecto la agenda real no tiene cita previa
     (y nunca se pega a la API de Dentidesk desde los tests)."""
-    monkeypatch.setattr("agent.tool_handlers.dentidesk.find_by_cedula", lambda *a, **k: None)
-    monkeypatch.setattr("agent.tool_handlers.dentidesk.find_by_phone", lambda *a, **k: None)
+    monkeypatch.setattr("agent.tool_handlers.dentidesk.find_in_day", lambda *a, **k: None)
 
 
 def _proximo(weekday: int) -> str:
@@ -304,7 +303,7 @@ def test_agendar_idempotente_si_ya_hay_cita_ese_dia(monkeypatch):
     # Doble llamada del modelo (o dos mensajes casi simultáneos): si la agenda real ya tiene
     # cita del paciente ese día, NO se abre Playwright ni se crea duplicado.
     monkeypatch.setattr(
-        "agent.tool_handlers.dentidesk.find_by_phone",
+        "agent.tool_handlers.dentidesk.find_in_day",
         lambda *a, **k: {"IdAgenda": "555", "PatientName": "Juan Pérez",
                          "Date": _LUNES, "time": "10:00"},
     )
@@ -321,7 +320,7 @@ def test_agendar_sigue_si_chequeo_idempotencia_falla(monkeypatch):
     # La consulta a la agenda es best-effort: si la API falla, el agendado continúa.
     def _boom(*a, **k):
         raise RuntimeError("API caída")
-    monkeypatch.setattr("agent.tool_handlers.dentidesk.find_by_phone", _boom)
+    monkeypatch.setattr("agent.tool_handlers.dentidesk.find_in_day", _boom)
     with patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
                return_value={"success": True, "IdAgenda": "777"}):
         result = json.loads(handle_tool("agendar_cita_dentidesk",
@@ -528,8 +527,7 @@ def test_agendar_tercero_con_datos_propios_del_tercero_si_agenda():
     """Nombre y cédula del tercero (distintos a los del titular) -> agenda normal."""
     titular = {"name": "Karen Ferreras", "cedula": "03102778092"}
     with patch("agent.tool_handlers.db.get_patient", return_value=titular), \
-         patch("agent.tool_handlers.dentidesk.find_by_cedula", return_value=None), \
-         patch("agent.tool_handlers.dentidesk.find_by_phone") as mock_phone, \
+         patch("agent.tool_handlers.dentidesk.find_in_day", return_value=None) as mock_find, \
          patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
                return_value={"IdAgenda": "1"}) as mock_pw:
         result = json.loads(handle_tool("agendar_cita_dentidesk", {
@@ -538,15 +536,14 @@ def test_agendar_tercero_con_datos_propios_del_tercero_si_agenda():
     assert result["success"] is True
     mock_pw.assert_called_once()
     # En cita de tercero NO se busca por el teléfono de quien escribe: encontraría la cita del titular.
-    mock_phone.assert_not_called()
+    assert mock_find.call_args.kwargs["phone"] == ""
 
 
 def test_agendar_titular_no_dispara_el_guard():
     """Cita propia con los datos del titular: normal, no es el caso del guard."""
     titular = {"name": "Juan Pérez", "cedula": "03102778092"}
     with patch("agent.tool_handlers.db.get_patient", return_value=titular), \
-         patch("agent.tool_handlers.dentidesk.find_by_cedula", return_value=None), \
-         patch("agent.tool_handlers.dentidesk.find_by_phone", return_value=None), \
+         patch("agent.tool_handlers.dentidesk.find_in_day", return_value=None), \
          patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
                return_value={"IdAgenda": "1"}) as mock_pw:
         result = json.loads(handle_tool("agendar_cita_dentidesk", {**_BASE_ARGS, "time": "10:00 AM"}))
@@ -574,8 +571,7 @@ def test_ortodoncia_y_general_son_fichas_DISTINTAS():
 # ── Carla elige el doctor del listado real de Dentidesk ───────────────────────────────────────
 
 def test_doctor_elegido_por_carla_llega_a_playwright():
-    with patch("agent.tool_handlers.dentidesk.find_by_cedula", return_value=None), \
-         patch("agent.tool_handlers.dentidesk.find_by_phone", return_value=None), \
+    with patch("agent.tool_handlers.dentidesk.find_in_day", return_value=None), \
          patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
                return_value={"IdAgenda": "1"}) as mock_pw:
         result = json.loads(handle_tool("agendar_cita_dentidesk", {
@@ -596,8 +592,7 @@ def test_doctor_inventado_no_llama_playwright():
 
 
 def test_sin_doctor_elegido_cae_al_default_de_la_especialidad():
-    with patch("agent.tool_handlers.dentidesk.find_by_cedula", return_value=None), \
-         patch("agent.tool_handlers.dentidesk.find_by_phone", return_value=None), \
+    with patch("agent.tool_handlers.dentidesk.find_in_day", return_value=None), \
          patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
                return_value={"IdAgenda": "1"}) as mock_pw:
         result = json.loads(handle_tool("agendar_cita_dentidesk",
@@ -664,3 +659,25 @@ def test_telefono_compartido_no_devuelve_la_cita_del_pariente():
     assert _cita_matches(cita_de_la_mama, "", tel, frozenset())
     # La cédula manda siempre.
     assert _cita_matches(cita_de_la_mama, _norm_doc("031-0277809-2"), "", frozenset())
+
+
+def test_agendar_familia_mismo_telefono_no_bloquea_al_segundo(monkeypatch):
+    """Caso Sra. Díaz (2026-08-24): una persona agenda a varios familiares desde SU número.
+
+    Las citas de los parientes se crean con ESE teléfono. Al pedir la suya, el chequeo de
+    idempotencia buscaba por teléfono, encontraba la cita del pariente y devolvía
+    'ya tiene cita ese día' -> la persona se quedaba SIN AGENDAR. Con nombre completo el
+    teléfono ya no decide."""
+    from integrations import dentidesk
+    agenda = [{"IdAgenda": "555", "PatientName": "Luis Diaz Rosario",
+               "PatientDocument": "00112345678", "Phone": "+18091234567",
+               "Date": _LUNES, "time": "09:00"}]
+    monkeypatch.setattr(dentidesk, "get_agenda_day", lambda *a, **k: agenda)
+    monkeypatch.setattr("agent.tool_handlers.dentidesk.find_in_day", dentidesk.find_in_day)
+    with patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
+               return_value={"IdAgenda": "556"}) as mock_pw:
+        result = json.loads(handle_tool("agendar_cita_dentidesk", {
+            **_BASE_ARGS, "patient_name": "Maria Diaz Perez", "cedula": "00199988877",
+            "time": "10:00 AM"}))
+    assert result.get("ya_existia") is not True, "la cita del pariente bloqueó la suya"
+    mock_pw.assert_called_once()

@@ -243,13 +243,15 @@ def _agendar_cita_dentidesk(
     # mensajes procesados casi a la vez. Si la consulta falla (red/API), se sigue con el agendado:
     # peor un duplicado raro que bloquear citas legítimas.
     try:
-        existente = None
-        if cedula:
-            existente = dentidesk.find_by_cedula(cedula, fecha_iso, loc)
-        # En cita de tercero el teléfono es el de quien escribe: buscar por él encontraría la cita
-        # DEL TITULAR ese día y abortaría la del familiar. Solo la cédula (del tercero) sirve.
-        if existente is None and patient_phone and not cita_para_tercero:
-            existente = dentidesk.find_by_phone(patient_phone, fecha_iso, loc)
+        # El TELÉFONO no identifica a nadie: una familia deja el mismo número y las citas de los
+        # parientes se crean CON ESE número. Buscando solo por teléfono, la 2ª persona del mismo
+        # número recibía "ya tiene cita ese día" y se quedaba SIN AGENDAR (caso Sra. Díaz,
+        # 2026-08-24). find_in_day usa el mismo criterio que el resto (_cita_matches): con nombre
+        # de >=2 palabras el teléfono NO decide. En cita de tercero el teléfono ni se manda.
+        existente = dentidesk.find_in_day(
+            fecha_iso, cedula=cedula, nombre=patient_name,
+            phone="" if cita_para_tercero else patient_phone, location=loc,
+        )
         if existente:
             return {"success": True, "ya_existia": True,
                     "IdAgenda": existente.get("IdAgenda"),

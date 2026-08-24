@@ -171,8 +171,7 @@ def test_fallo_al_registrar_cita_queda_contado(monkeypatch):
     from agent.tool_handlers import handle_tool
     from unittest.mock import patch
     metrics.snapshot_and_reset()
-    with patch("agent.tool_handlers.dentidesk.find_by_cedula", return_value=None), \
-         patch("agent.tool_handlers.dentidesk.find_by_phone", return_value=None), \
+    with patch("agent.tool_handlers.dentidesk.find_in_day", return_value=None), \
          patch("agent.tool_handlers.dentidesk_playwright.create_appointment",
                side_effect=RuntimeError("502 del daemon")):
         handle_tool("agendar_cita_dentidesk", {
