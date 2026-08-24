@@ -257,12 +257,20 @@ def _agendar_cita_dentidesk(
         # la tarde porque ya tenía una a las 08:30 del año pasado. Lo que este chequeo debe frenar
         # es el doble-clic del modelo, que repite la MISMA hora.
         if existente and str(existente.get("time") or "")[:5] == time24[:5]:
-            return {"success": True, "ya_existia": True,
+            # success=False A PROPÓSITO: NO se creó nada en esta llamada. Con success=True el
+            # modelo lo leía como "listo" y le confirmaba al paciente una cita que él no había
+            # creado (caso Sra. Díaz, 2026-08-24: "le confirmo las citas de ... y Nueva Díaz").
+            # Nunca se confirma lo que esta llamada no escribió.
+            return {"success": False, "error": "no_creada_ya_existia", "ya_existia": True,
                     "IdAgenda": existente.get("IdAgenda"),
                     "paciente": existente.get("PatientName"),
                     "fecha": existente.get("Date"), "hora": existente.get("time"),
-                    "message": "El paciente ya tiene esa MISMA cita registrada; no se creó otra. "
-                               "Ya está agendada: confírmesela, no la registre de nuevo."}
+                    "message": (f"NO se creó ninguna cita: en la agenda ya hay una a esa misma hora "
+                                f"a nombre de {existente.get('PatientName')} "
+                                f"({existente.get('Date')} {existente.get('time')}). "
+                                f"Dígale al paciente qué cita aparece y pregúntele si es la suya. "
+                                f"Si dice que NO es suya, o pide otra hora, vuelva a registrarla "
+                                f"con la hora nueva. NO le confirme una cita que usted no creó.")}
     except Exception:
         pass
     res = _escribir_o_contar(

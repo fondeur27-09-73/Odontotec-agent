@@ -310,7 +310,9 @@ def test_agendar_idempotente_si_ya_hay_cita_ese_dia(monkeypatch):
     with patch("agent.tool_handlers.dentidesk_playwright.create_appointment") as mock_pw:
         result = json.loads(handle_tool("agendar_cita_dentidesk",
                                         {**_BASE_ARGS, "time": "10:00 AM"}))
-    assert result["success"] is True
+    # NO se creó nada -> success False: Carla no puede confirmar lo que esta llamada no escribió.
+    assert result["success"] is False
+    assert result["error"] == "no_creada_ya_existia"
     assert result["ya_existia"] is True
     assert result["IdAgenda"] == "555"
     mock_pw.assert_not_called()
@@ -713,4 +715,5 @@ def test_agendar_misma_hora_sigue_siendo_duplicado(monkeypatch):
         result = json.loads(handle_tool("agendar_cita_dentidesk",
                                         {**_BASE_ARGS, "time": "10:00 AM"}))
     assert result["ya_existia"] is True
+    assert result["success"] is False
     mock_pw.assert_not_called()
