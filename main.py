@@ -203,7 +203,15 @@ async def _process_message(conv_id: int, phone: str, content: str):
         from agent import metrics
         metrics.increment("agent_failed")
         try:
-            send_message(conv_id, "Permítame un momento, por favor. Enseguida le atiendo.")
+            # Este aviso también se repite si el fallo es persistente (LLM sin saldo, daemon caído):
+            # el paciente recibía "permítame un momento" cada vez que escribía. Mismo corte.
+            aviso = "Permítame un momento, por favor. Enseguida le atiendo."
+            try:
+                previo = _build_history(conv_id)
+            except Exception:
+                previo = []   # si ni el historial se puede leer, igual hay que responderle
+            aviso = _romper_bucle(conv_id, previo, aviso)
+            send_message(conv_id, aviso)
         except Exception as notify_err:
             logger.critical(
                 f"_process_message tampoco pudo avisarle al paciente conv={conv_id}: {notify_err}"
