@@ -47,24 +47,62 @@ def test_romper_bucle_deja_pasar_una_respuesta_distinta():
     assert _romper_bucle(1, hist, "¿Para qué día desea su cita?") == "¿Para qué día desea su cita?"
 
 
-def test_romper_bucle_corta_la_repeticion_y_escala(monkeypatch):
+def test_romper_bucle_corta_la_repeticion_y_avisa(monkeypatch):
     """Caso Sra. Díaz (2026-08-24): el GUION F repetido sin fin. La 2ª vez ya no sale."""
     import main
     guion_f = "Sra. Díaz, permítame un momento, estoy registrando su cita."
     hist = [{"role": "assistant", "content": guion_f},
             {"role": "user", "content": "ok"}]
-    escaladas = []
-    monkeypatch.setattr("agent.tool_handlers._escalate_to_human",
-                        lambda reason, cid: escaladas.append((reason, cid)))
+    avisos = []
+    main._bucle_avisado.discard(7)
+    monkeypatch.setattr(main, "_avisar_bucle", lambda cid, texto: avisos.append((cid, texto)))
     salida = main._romper_bucle(7, hist, guion_f)
     assert salida == main._MENSAJE_HANDOFF
-    assert salida != guion_f
-    assert len(escaladas) == 1 and escaladas[0][1] == 7
+    assert avisos == [(7, guion_f)]
+
+
+def test_romper_bucle_no_pone_bot_off(monkeypatch):
+    """El corte NO puede silenciar a Carla: bot-off es permanente y la deja muda en esa
+    conversación también los días siguientes (decisión del usuario, 2026-08-24)."""
+    import main
+    from integrations import chatwoot
+    etiquetas = []
+    monkeypatch.setattr(chatwoot, "add_label", lambda cid, label: etiquetas.append(label))
+    monkeypatch.setattr("integrations.alerts.send_dev_alert", lambda msg: None)
+    main._bucle_avisado.discard(9)
+    hist = [{"role": "assistant", "content": "Permítame un momento."}]
+    main._romper_bucle(9, hist, "Permítame un momento.")
+    import time; time.sleep(0.3)   # el aviso va en un hilo daemon
+    assert chatwoot.BOT_OFF_LABEL not in etiquetas
+    assert etiquetas == ["carla-atascada"]
+
+
+def test_romper_bucle_no_repite_el_handoff(monkeypatch):
+    """Si el paciente sigue escribiendo y Carla sigue atascada, callar — no repetirle el handoff."""
+    import main
+    monkeypatch.setattr(main, "_avisar_bucle", lambda cid, texto: None)
+    main._bucle_avisado.discard(11)
+    guion_f = "Permítame un momento, estoy registrando su cita."
+    hist = [{"role": "assistant", "content": guion_f}]
+    assert main._romper_bucle(11, hist, guion_f) == main._MENSAJE_HANDOFF
+    hist2 = [{"role": "assistant", "content": main._MENSAJE_HANDOFF}]
+    assert main._romper_bucle(11, hist2, main._MENSAJE_HANDOFF) is None
+
+
+def test_romper_bucle_se_rearma_si_carla_dice_algo_distinto(monkeypatch):
+    """Salir del bucle vuelve a dejar el aviso listo para la próxima vez."""
+    import main
+    monkeypatch.setattr(main, "_avisar_bucle", lambda cid, texto: None)
+    main._bucle_avisado.add(13)
+    hist = [{"role": "assistant", "content": "Permítame un momento."}]
+    assert main._romper_bucle(13, hist, "Su cita quedó para el martes.") == "Su cita quedó para el martes."
+    assert 13 not in main._bucle_avisado
 
 
 def test_romper_bucle_ignora_mayusculas_y_espacios(monkeypatch):
     """Un espacio de más no es un mensaje nuevo."""
     import main
-    monkeypatch.setattr("agent.tool_handlers._escalate_to_human", lambda reason, cid: None)
+    monkeypatch.setattr(main, "_avisar_bucle", lambda cid, texto: None)
+    main._bucle_avisado.discard(15)
     hist = [{"role": "assistant", "content": "Permítame un momento."}]
-    assert main._romper_bucle(1, hist, "  permítame   un momento.  ") == main._MENSAJE_HANDOFF
+    assert main._romper_bucle(15, hist, "  permítame   un momento.  ") == main._MENSAJE_HANDOFF

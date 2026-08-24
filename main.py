@@ -127,40 +127,68 @@ def _build_history(conv_id: int) -> list[dict]:
     return history[-MAX_HISTORY:]
 
 # Lo que Carla dice cuando se corta un bucle. NO promete cita ni confirma nada: solo avisa que
-# sigue una persona. La conversación queda en bot-off, así que este es su último mensaje.
+# sigue una persona.
 _MENSAJE_HANDOFF = ("Permítame comunicarle con una persona de la clínica para terminar de coordinar "
                     "su cita. En un momento le atienden por este mismo medio.")
+
+# Conversaciones donde ya se corto un bucle: para avisar UNA vez (edge-trigger, como el watchdog)
+# en vez de un correo por mensaje.
+_bucle_avisado: set[int] = set()
 
 
 def _texto_norm(t) -> str:
     return " ".join(str(t or "").split()).lower()
 
 
-def _romper_bucle(conv_id: int, history: list[dict], texto: str) -> str:
-    """Carla NUNCA manda dos veces seguidas el mismo mensaje.
+def _avisar_bucle(conv_id: int, texto: str) -> None:
+    """Aviso por correo + etiqueta visible en Chatwoot. NO pone bot-off: eso deja a Carla muda en
+    esa conversación PARA SIEMPRE, también los días siguientes (decisión del usuario 2026-08-24).
+    Todo best-effort y en un hilo: send_dev_alert es SMTP síncrono con 15s de timeout."""
+    import threading
+    from integrations import alerts, chatwoot
+
+    def _fondo():
+        try:
+            chatwoot.add_label(conv_id, "carla-atascada")
+        except Exception as e:
+            logger.error(f"_avisar_bucle conv={conv_id}: no se pudo etiquetar: {e}")
+        alerts.send_dev_alert(
+            f"[CARLA-BUCLE] 🔁 la conversación {conv_id} se atascó: Carla iba a repetir "
+            f"{texto[:160]!r}. Se corto el mensaje y se le paso la palabra a una persona. "
+            f"Carla SIGUE ACTIVA en la conversación — atender en Chatwoot."
+        )
+
+    threading.Thread(target=_fondo, daemon=True).start()
+
+
+def _romper_bucle(conv_id: int, history: list[dict], texto: str) -> str | None:
+    """Carla NUNCA manda dos veces seguidas el mismo mensaje. Devuelve el texto a enviar, o None
+    para no enviar nada.
 
     El 2026-08-24 la Sra. Díaz recibió el GUION F ("permítame un momento, estoy registrando su
     cita") una y otra vez: la tool fallaba siempre igual, el prompt le dice a Carla que INSISTA, y
     nada acotaba los reintentos ENTRE turnos (MAX_ITERATIONS solo acota UN turno). El paciente
     esperó hasta que un humano lo vio por casualidad.
 
-    El watchdog ya detecta esto, pero llega tarde y por correo. Acá se corta en el origen: si la
-    respuesta es idéntica a la anterior de Carla, no se manda — se escala a un humano (label
-    bot-off + alerta) y el paciente recibe un mensaje distinto, UNA vez.
+    Vale para CUALQUIER bucle, venga del error que venga: compara texto, no causas.
 
-    Vale para CUALQUIER bucle, venga del error que venga: compara texto, no causas."""
+    NO silencia a Carla. Si en el mensaje siguiente tiene algo distinto que decir, lo dice: el
+    corte se aplica mensaje a mensaje, no marca la conversación."""
     anterior = next((m.get("content") for m in reversed(history)
                      if m.get("role") == "assistant"), None)
     if not texto or _texto_norm(anterior) != _texto_norm(texto):
+        _bucle_avisado.discard(conv_id)   # dijo algo distinto: el bucle se rompió
         return texto
-    logger.critical(f"_romper_bucle conv={conv_id}: Carla repetía {texto!r} — se corta y escala")
     from agent import metrics
-    from agent.tool_handlers import _escalate_to_human
     metrics.increment("bucle_cortado")
-    try:
-        _escalate_to_human(f"Carla se repetía: {texto[:120]!r}", conv_id)
-    except Exception as e:   # escalar es best-effort: el paciente igual recibe el handoff
-        logger.critical(f"_romper_bucle conv={conv_id}: no se pudo escalar: {e}")
+    # Ya se le paso la palabra a un humano y el paciente sigue escribiendo: callar es mejor que
+    # repetirle el handoff. El aviso ya salio; no se manda otro por cada mensaje.
+    if conv_id in _bucle_avisado or _texto_norm(texto) == _texto_norm(_MENSAJE_HANDOFF):
+        logger.critical(f"_romper_bucle conv={conv_id}: sigue atascada, no se manda nada")
+        return None
+    logger.critical(f"_romper_bucle conv={conv_id}: Carla repetía {texto!r} — se corta y avisa")
+    _bucle_avisado.add(conv_id)
+    _avisar_bucle(conv_id, texto)
     return _MENSAJE_HANDOFF
 
 
@@ -185,7 +213,8 @@ async def _process_message(conv_id: int, phone: str, content: str):
             response_text = await asyncio.to_thread(run_agent, history, conv_id, phone)
             logger.info(f"_process_message response conv={conv_id}: {response_text!r}")
             response_text = _romper_bucle(conv_id, history, response_text)
-            send_message(conv_id, response_text)
+            if response_text is not None:
+                send_message(conv_id, response_text)
             logger.info(f"_process_message sent conv={conv_id}")
     except Exception as e:
         # Un fallo aquí (LLM sin saldo -> 402, timeout, daemon caído, respuesta vacía del modelo)
@@ -211,7 +240,8 @@ async def _process_message(conv_id: int, phone: str, content: str):
             except Exception:
                 previo = []   # si ni el historial se puede leer, igual hay que responderle
             aviso = _romper_bucle(conv_id, previo, aviso)
-            send_message(conv_id, aviso)
+            if aviso is not None:
+                send_message(conv_id, aviso)
         except Exception as notify_err:
             logger.critical(
                 f"_process_message tampoco pudo avisarle al paciente conv={conv_id}: {notify_err}"
