@@ -1,6 +1,94 @@
 # CLAUDE.md — Carla Odontotec WhatsApp Agent
 
-## 🔴 ARRANCAR AQUÍ — Sesión 2026-08-21 (tarde): INCIDENTE EN PRODUCCIÓN, RESUELTO
+## 🟢 ARRANCAR AQUÍ — Sesión 2026-08-24 CERRADA: caso Sra. Díaz, 4 mejoras desplegadas
+
+**En una línea:** una paciente agendó a sus 3 hijos y a ella misma; **los hijos entraron, la de ella
+no** — y Carla se la confirmó igual y después se quedó repitiendo el GUION F hasta que un humano lo
+vio por casualidad. Cuatro correcciones, **desplegadas y verificadas en el contenedor** (`94a2e5f`).
+
+### Lo que pasó (conversación real, 2026-08-24, tel `+18098545650`)
+
+| Hora | Qué |
+|---|---|
+| 11:31–11:32 | Carla crea las 3 citas de los hijos (`IdAgenda 2358823/24/25`, todas 14:00). ✅ |
+| 11:33 | La Sra. Díaz pide la suya (`Nueva Díaz`, cédula `00116819525`, consulta, tarde). |
+| 11:34 | **"le confirmo las citas de … y Nueva Díaz"** — mentira: no se creó nada. |
+| 11:35 | GUION F, "permítame un momento, estoy registrando su cita". |
+| 11:41 | Escala a un humano. La paciente llega a la clínica creyendo que tiene cita. |
+
+### Las 4 correcciones (todas con test de regresión que reproduce el caso real)
+
+| Commit | Qué estaba mal | Cómo quedó |
+|---|---|---|
+| `77f4955` | El chequeo anti-duplicado usaba `find_by_phone`. **Una familia entera deja el mismo número** y las citas se crean CON ese número → la 2ª persona recibía "ya tiene cita". | `find_in_day`, mismo `_cita_matches` del resto: con nombre de ≥2 palabras el teléfono **no decide**. |
+| `e57a409` | **CAUSA REAL.** El chequeo era "¿ya tiene cita ESE DÍA?". Ella tenía una a las 08:30 creada en 2025 → la de la tarde se bloqueó. El supuesto "1 cita por paciente por día" **es falso**: la agenda real está llena de pacientes con 2 y 3 citas el mismo día. | Solo es duplicado si coincide **la MISMA hora** (que es el doble-clic del modelo, lo único que este chequeo debía frenar). |
+| `b9454ee` | `ya_existia` viajaba con **`success: True`** → el modelo lo leía como "listo" y confirmaba una cita inexistente. | `success: False` + `error: "no_creada_ya_existia"` y **rama propia en el prompt**: decirle al paciente qué cita aparece y preguntar si es la suya. Sin GUION A (nada que confirmar) y **sin GUION F** (no es fallo técnico — sin esa rama caía en el bucle). |
+| `940379f` `c8518f6` `94a2e5f` | **El bucle.** `MAX_ITERATIONS=10` acota UN turno; entre turnos no había nada. El prompt dice INSISTA, la tool fallaba siempre igual → GUION F sin fin. | `_romper_bucle` en `main.py`, justo antes de `send_message`. Ver abajo. |
+
+### 🔁 `_romper_bucle` — la regla: Carla NUNCA repite el mismo mensaje
+
+Vive en [main.py](main.py) **justo antes de `send_message`**, el único sitio por el que pasa toda
+respuesta. Si el texto es idéntico al anterior de Carla (normalizando espacios y mayúsculas):
+**no se manda** → etiqueta `carla-atascada` en Chatwoot + correo → el paciente recibe el handoff
+UNA vez → métrica `bucle_cortado`.
+
+- ⭐ **Compara TEXTO, no causas.** No hay que anticipar el error nuevo: cualquier bucle futuro se
+  corta solo, venga del daemon, del LLM, de Chatwoot o de una rama del prompt que no existe aún.
+- 🚫 **NADA de `bot-off` aquí (regla del usuario, 2026-08-24).** Es PERMANENTE: deja la conversación
+  sin Carla para siempre, también los días siguientes. Un tropiezo de un minuto no puede costar el
+  agente en ese chat. Por eso la etiqueta es informativa y **no apaga el bot**. Hay un test que
+  revienta si alguien vuelve a meter `bot-off` ahí.
+- **El handoff tampoco se repite:** mientras siga atascada y el paciente siga escribiendo, no se
+  manda nada — el humano ya fue avisado. El correo sale UNA vez por atasco (`_bucle_avisado`,
+  edge-trigger) y se rearma solo cuando Carla dice algo distinto.
+- **Cubre las DOS salidas:** la respuesta del agente y el aviso de emergencia del `except`
+  ("permítame un momento"), que se repetía igual cuando el fallo era persistente.
+- **Falso positivo aceptado:** si repite una cortesía, sale una etiqueta y un correo. Barato —
+  Carla sigue activa.
+
+### 🔬 Cómo se diagnosticó (repetible, SOLO LECTURA — ahorra horas)
+
+Chatwoot local da 401, pero **la API de Dentidesk se lee desde el repo con las creds del `.env`**:
+
+```python
+from dotenv import load_dotenv; load_dotenv()      # ⚠️ ruta explícita si el script vive fuera del repo
+from integrations import dentidesk
+dentidesk.get_agenda_day("2026-08-24", "214")       # lectura pura, no escribe nada
+```
+
+Filtrando por teléfono y mirando **`CreateDate`** se distingue al instante quién creó cada cita:
+
+| Señal | Lo creó |
+|---|---|
+| `Phone` con `+1`, cédula de 11 dígitos, `CreateDate` del día | **Carla** |
+| Teléfono sin `+`, cédula `1-9`, `CreateDate` viejo | el personal, a mano |
+
+Así se probó que los 3 hijos entraron y la de ella no — sin logs, sin contenedor, sin Chatwoot.
+
+### ✅ Desplegado y verificado (2026-08-24)
+
+Un solo Deploy de `odontotec` (el daemon no se tocó). Tamaños LF exactos en el contenedor:
+`main.py` **19756** · `agent/tool_handlers.py` **25665** · `agent/prompts.py` **31833**.
+Prueba rápida: `grep -c _romper_bucle /app/main.py` → **5**. Suite: **159 pasan**.
+
+### 👀 Qué mirar de ahora en adelante
+
+- **La etiqueta `carla-atascada` en Chatwoot** es el corte funcionando. Cuando aparezca, hay un
+  fallo real debajo que ahora sale a la luz en vez de convertirse en un paciente esperando.
+- La cita de la Sra. Díaz del 24-ago **nunca existió**; el usuario decidió que la reciben igual.
+
+### ⏳ PENDIENTES (siguen abiertos, del bloque de abajo)
+
+1. **Las 4 preguntas al cliente sobre los doctores** — especialidad de Mirleinis Casado, Monica
+   Vargas y Roner Capellan; y qué pasó con la Dra. Ekaterina Fernandez (odontopediatría se queda
+   con UNA sola doctora si ella ya no está).
+2. **E2E completo por WhatsApp** (agendar + reagendar para un tercero) — sigue sin terminarse.
+3. Limpiar env vars basura de `odontotec` (`SMTP_*` duplicado — **la buena es la de abajo**) y los
+   recordatorios masivos (Fase 3, bloqueada por plantilla de Meta).
+
+---
+
+## 🟡 (previo) Sesión 2026-08-21 (tarde): INCIDENTE EN PRODUCCIÓN, RESUELTO
 
 **En una línea:** durante el e2e se descubrió que **NINGUNA cita se podía crear** — el daemon
 devolvía `502` y Carla repetía el GUION F. Había **pacientes reales esperando**. Arreglado en 3
