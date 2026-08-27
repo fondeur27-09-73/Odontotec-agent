@@ -195,7 +195,14 @@ def main():
         print(f">>> Abriendo Chrome (perfil {PROFILE}, DISPLAY={os.getenv('DISPLAY')})...", flush=True)
         ctx = p.chromium.launch_persistent_context(
             PROFILE, headless=False, slow_mo=100, channel="chrome",
+            # Playwright arranca Chrome con --enable-automation y navigator.webdriver=true. El
+            # reCAPTCHA de Google lo detecta: 2026-08-27, con el daemon deslogueado, el humano
+            # resolvia desafios de IMAGENES una y otra vez y Dentidesk seguia respondiendo
+            # "seleccione 'No soy un robot'" -> el token llegaba vacio/rechazado y era IMPOSIBLE
+            # loguearse a mano. Sin estas dos lineas, un deslogueo no se puede reparar.
+            ignore_default_args=["--enable-automation"],
             args=[f"--remote-debugging-port={CDP_PORT}", "--start-maximized", "--new-window",
+                  "--disable-blink-features=AutomationControlled",
                   # Docker le da 64MB a /dev/shm; Chrome lo agota y se estrella (sospecha de por
                   # que aparecieron 4 `[chrome] <defunct>` con el daemon vivo, 2026-07-16). Con
                   # esto usa /tmp en vez de /dev/shm. Inofensivo si la causa resulta ser otra.
