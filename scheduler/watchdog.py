@@ -14,6 +14,7 @@ calla — 5 min de intervalo serían 288 mensajes al día y el operador silencia
 """
 
 import os
+import time
 import logging
 
 from integrations import alerts
@@ -27,6 +28,9 @@ _last_ok: dict[str, bool | None] = {}
 # Conversaciones por las que ya se avisó que están estancadas. Edge-trigger: una alerta por
 # conversación; al dejar de estar estancada se saca del set y se re-arma por si recae.
 _alerted_stalled: set[int] = set()
+
+# Cuándo se mandó el último aviso de cada sonda caída, para repetirlo cada WATCHDOG_REALERT_HOURS.
+_last_alert_ts: dict[str, float] = {}
 
 
 def _interval_min() -> int:
@@ -63,13 +67,24 @@ def _check_llm_reachable() -> tuple[bool, str]:
 
 
 def _maybe_alert(key: str, ok: bool, detail: str) -> None:
+    """Edge-trigger + recordatorio periódico mientras siga caído.
+
+    El edge-trigger puro dejó el daemon DESLOGUEADO desde el 2026-08-25 con UN solo correo: el
+    aviso se perdió entre el ruido y nadie volvió a enterarse en 2 días. Un deslogueo necesita a
+    un humano en el VNC (reCAPTCHA), así que callarse para siempre es lo peor que puede hacer.
+    Recordatorio cada WATCHDOG_REALERT_HOURS (default 6) — barato; los 288/día del intervalo no."""
     was_ok = _last_ok.get(key)
     _last_ok[key] = ok
-    if not ok and was_ok is not False:
-        msg = f"[CARLA-WATCHDOG] ⚠️ {key} caído: {detail}"
-        logger.critical(msg)
-        alerts.send_dev_alert(msg)
-    elif ok and was_ok is False:
+    if not ok:
+        realert = float(os.getenv("WATCHDOG_REALERT_HOURS", "6")) * 3600
+        ahora = time.time()
+        if was_ok is not False or ahora - _last_alert_ts.get(key, 0.0) >= realert:
+            _last_alert_ts[key] = ahora
+            msg = f"[CARLA-WATCHDOG] ⚠️ {key} caído: {detail}"
+            logger.critical(msg)
+            alerts.send_dev_alert(msg)
+    elif was_ok is False:
+        _last_alert_ts.pop(key, None)
         msg = f"[CARLA-WATCHDOG] ✅ {key} recuperado"
         logger.info(msg)
         alerts.send_dev_alert(msg)

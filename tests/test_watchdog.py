@@ -9,6 +9,7 @@ from agent.tool_handlers import _fecha_no_pasada
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
     watchdog._last_ok.clear()
+    watchdog._last_alert_ts.clear()
     metrics.snapshot_and_reset()
     enviadas = []
     monkeypatch.setattr(watchdog.alerts, "send_dev_alert", enviadas.append)
@@ -43,6 +44,22 @@ def test_recuperado_avisa_una_vez(_reset):
     watchdog._maybe_alert("llm", True, "ok")
     assert len(_reset) == 2
     assert "recuperado" in _reset[1]
+
+
+def test_recordatorio_si_sigue_caido(_reset, monkeypatch):
+    """El daemon deslogueado el 2026-08-25 mandó UN correo y se calló 2 días. Mientras siga caído
+    hay que recordarlo cada WATCHDOG_REALERT_HOURS: sin humano en el VNC no se arregla solo."""
+    monkeypatch.setenv("WATCHDOG_REALERT_HOURS", "6")
+    t = [1_000_000.0]
+    monkeypatch.setattr(watchdog.time, "time", lambda: t[0], raising=False)
+    watchdog._maybe_alert("daemon", False, "no logueado")
+    t[0] += 3600 * 5                      # 5h despues: aun no toca
+    watchdog._maybe_alert("daemon", False, "no logueado")
+    assert len(_reset) == 1
+    t[0] += 3600 * 2                      # 7h desde el primer aviso: recordatorio
+    watchdog._maybe_alert("daemon", False, "no logueado")
+    assert len(_reset) == 2
+    assert "daemon caído" in _reset[1]
 
 
 def test_daemon_sin_url_no_alerta(monkeypatch):
